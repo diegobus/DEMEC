@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyo
+*.pyd
+*.so
+*.dll
+*.log
+
+# --- Environments ---
+.env
+.venv
+venv/
+.envrc
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Build / packaging ---
+build/
+dist/
+*.egg
+.eggs/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+
+# --- Data ---
+# Keep processed data (cache + graphs), but ignore raw .tsv downloads
+data/**/*.tsv
+data/**/*.tsv.gz
+data/**/*.zip

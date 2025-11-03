@@ -17,9 +17,40 @@ DEMEC (Drug Embedding & Multi-Effect Classification) aims to leverage **Graph Ne
 ### DrugBank Database
 - Source: [https://pubmed.ncbi.nlm.nih.gov/29126136/](https://pubmed.ncbi.nlm.nih.gov/29126136/)
 - Provides detailed drug chemical properties and molecular structures.
-- Used to link chemical structure information to the SIDER dataset via ATC codes.
+- Used to link chemical structure information to the SIDER dataset via CID/ATC codes.
 
 These datasets together allow us to build a graph representation that connects molecular substructures, drugs, and their associated side effects.
+
+### Downloading Data
+
+This repository includes **processed and aggregated data** from the **SIDER** and **DrugBank** databases, located under:
+
+```
+data/processed/
+├─ smiles_cache.csv              # Cached SMILES for each CID
+└─ graphs/                       # Contains one [CID].gpickle file per drug
+```
+
+If you would like to download and process the **raw SIDER dataset** yourself, run the following commands from the repository root:
+
+```bash
+cd data
+curl -O http://sideeffects.embl.de/media/download/README
+curl -O http://sideeffects.embl.de/media/download/drug_names.tsv
+curl -O http://sideeffects.embl.de/media/download/drug_atc.tsv
+curl -O http://sideeffects.embl.de/media/download/medra_all_indications.tsv.gz
+curl -O http://sideeffects.embl.de/media/download/meddra_all_se.tsv.gz
+curl -O http://sideeffects.embl.de/media/download/meddra_freq.tsv.gz
+gunzip *.gz
+```
+
+After downloading, you can **reprocess and aggregate** the data into molecular graphs and cached SMILES by running:
+
+```bash
+python scripts/aggregate_data.py data/drug_names.tsv data/drug_atc.tsv
+```
+
+This will populate `data/processed/smiles_cache.csv` and `data/processed/graphs/` with the processed results.
 
 ---
 

@@ -1,0 +1,38 @@
+name: demec
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  # --- Core ---
+  - python=3.11
+  - pip
+  - pandas
+  - numpy
+  - tqdm
+  - requests
+  - networkx>=3.0
+  - rdkit
+  - pubchempy
+  - pysmiles
+  - matplotlib
+  - scikit-learn
+  - jupyter
+
+  # --- Dev tools ---
+  - pytest
+  - black
+  - ruff
+  - rich
+
+  # --- Deep learning ---
+  - pytorch
+  - pytorch-cuda=12.1  # comment out if CPU-only
+  - pip:
+      # PyTorch Geometric & extensions (from PyPI)
+      - torch-geometric
+      - torch-scatter
+      - torch-sparse
+      - torch-cluster
+      # Misc utilities
+      - typing-extensions
