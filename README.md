@@ -21,36 +21,56 @@ DEMEC (Drug Embedding & Multi-Effect Classification) aims to leverage **Graph Ne
 
 These datasets together allow us to build a graph representation that connects molecular substructures, drugs, and their associated side effects.
 
-### Downloading Data
+---
 
-This repository includes **processed and aggregated data** from the **SIDER** and **DrugBank** databases, located under:
+## Data Processing Pipeline
+
+Two scripts handle the preprocessing and integration of SIDER + DrugBank data:
+
+- **`scripts/process_edges.py`**  
+  Cleans the raw SIDER drug–side effect mappings:
+  - Filters `meddra_all_se.tsv` to keep only **Preferred Terms (PT)** (removing redundant LLTs).  
+  - Extracts **PubChem CIDs** from STITCH IDs for compatibility with DrugBank.  
+  - Merges in frequency metadata from `meddra_freq.tsv` (`freq_lo`, `freq_hi`, `freq_text`, `placebo`).  
+  - Deduplicates to unique `(cid, se_id)` pairs.  
+  - Saves to `data/processed/edges.csv` (≈145k PT-level drug–SE pairs).
+
+- **`scripts/aggregate_data.py`**  
+  Fetches molecular structures and builds graph representations:
+  - Queries **PubChem** for SMILES strings per CID and caches them in `smiles_cache.csv`.  
+  - Uses **PySMILES** to convert each SMILES string into a **NetworkX** molecular graph.  
+  - Saves each graph as a `.gpickle` file under `data/processed/graphs/`.
+
+Both scripts are modular and can be rerun independently as new data or mappings are added.
+
+### Directory Overview
 
 ```
-data/processed/
-├─ smiles_cache.csv              # Cached SMILES for each CID
-└─ graphs/                       # Contains one [CID].gpickle file per drug
+data/
+├─ drug_names.tsv                  # SIDER drug names
+├─ drug_atc.tsv                    # ATC codes
+├─ meddra_all_se.tsv               # SIDER side-effect mappings
+├─ meddra_freq.tsv                 # frequency annotations
+├─ processed/
+│  ├─ edges.csv                    # cleaned PT-level drug–SE mappings
+│  ├─ smiles_cache.csv             # CID–SMILES lookup table
+│  └─ graphs/                      # per-drug NetworkX molecular graphs
 ```
 
-If you would like to download and process the **raw SIDER dataset** yourself, run the following commands from the repository root:
+---
+
+## Quickstart
 
 ```bash
-cd data
-curl -O http://sideeffects.embl.de/media/download/README
-curl -O http://sideeffects.embl.de/media/download/drug_names.tsv
-curl -O http://sideeffects.embl.de/media/download/drug_atc.tsv
-curl -O http://sideeffects.embl.de/media/download/medra_all_indications.tsv.gz
-curl -O http://sideeffects.embl.de/media/download/meddra_all_se.tsv.gz
-curl -O http://sideeffects.embl.de/media/download/meddra_freq.tsv.gz
-gunzip *.gz
-```
+conda env create -f environment.yml
+conda activate demec
 
-After downloading, you can **reprocess and aggregate** the data into molecular graphs and cached SMILES by running:
+# Build PT-level edges and frequency data
+python scripts/process_edges.py
 
-```bash
+# Fetch SMILES and build molecular graphs
 python scripts/aggregate_data.py data/drug_names.tsv data/drug_atc.tsv
 ```
-
-This will populate `data/processed/smiles_cache.csv` and `data/processed/graphs/` with the processed results.
 
 ---
 
