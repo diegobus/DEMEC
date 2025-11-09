@@ -27,7 +27,7 @@ dependencies:
 
   # --- Deep learning ---
   - pytorch
-  - pytorch-cuda=12.1  # comment out if CPU-only
+  # - pytorch-cuda=12.1  # comment out if CPU-only
   - pip:
       # PyTorch Geometric & extensions (from PyPI)
       - torch-geometric
