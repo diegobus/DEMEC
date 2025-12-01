@@ -7,6 +7,7 @@ from torch_geometric.data import Data
 import pickle
 from torch_geometric.utils import from_networkx
 
+
 class GraphStructureDataset(Dataset):
 
     def __init__(self, graph_dir, cid_se_csv):
@@ -18,30 +19,35 @@ class GraphStructureDataset(Dataset):
         self.se_cols = list(cid_se_df.columns)
         self.y_table = cid_se_df.sort_index()
 
-        self.cid_to_y = {int(cid): torch.tensor(row.values, dtype=torch.float32) 
-            for cid, row in self.y_table.iterrows()}
-        
+        self.cid_to_y = {
+            int(cid): torch.tensor(row.values, dtype=torch.float32)
+            for cid, row in self.y_table.iterrows()
+        }
+
         files = os.listdir(graph_dir)
         items = []
-        for file in files: 
-            cid = int(file.split('.')[0])
+        for file in files:
+            cid = int(file.split(".")[0])
             full_file = graph_dir + file
             items.append((cid, full_file))
 
         self.items = sorted(items, key=lambda t: t[0])
 
+        self.node_dim = 1
+
     def __len__(self):
         return len(self.items)
-    
+
     def __getitem__(self, idx: int):
         cid, full_file = self.items[idx]
         with open(full_file, "rb") as f:
             G = pickle.load(f)
-        data = from_networkx(G)  
-        data.x = None           
-        data.y = self.cid_to_y[cid].unsqueeze(0) 
+        data = from_networkx(G)
+        data.x = torch.ones((data.num_nodes, 1), dtype=torch.float32)
+        data.y = self.cid_to_y[cid].unsqueeze(0)
         data.cid = torch.tensor([cid], dtype=torch.int64)
         return data
+
 
 def make_splits(dataset, train=0.8, val=0.1, seed=42):
     n = len(dataset)
