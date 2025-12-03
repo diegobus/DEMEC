@@ -54,22 +54,72 @@ data/
 ├─ processed/
 │  ├─ edges.csv                    # cleaned PT-level drug–SE mappings
 │  ├─ smiles_cache.csv             # CID–SMILES lookup table
+│  ├─ cid_se_matrix.csv            # multi-hot encoded targets
 │  └─ graphs/                      # per-drug NetworkX molecular graphs
+src/
+└─ demec/                          # Main package
+   ├─ data/                        # Data loaders
+   ├─ models/                      # GNN backbones and heads
+   ├─ training/                    # Training scripts
+   └─ utils/                       # Metrics and inspection tools
 ```
 
 ---
 
 ## Quickstart
 
+### 1. Installation
+
 ```bash
+# Create environment
 conda env create -f environment.yml
 conda activate demec
 
+# The package is installed in editable mode automatically.
+# If needed, manually install:
+pip install -e .
+```
+
+### 2. Data Preparation
+
+```bash
 # Build PT-level edges and frequency data
 python scripts/process_edges.py
 
 # Fetch SMILES and build molecular graphs
-python scripts/aggregate_data.py data/drug_names.tsv data/drug_atc.tsv
+python scripts/aggregate_sider.py data/drug_names.tsv data/drug_atc.tsv
+```
+
+### 3. Training
+
+You can train using either raw graph features or pre-computed embeddings (e.g., MolCLR).
+
+**Standard Training:**
+```bash
+python src/demec/training/train.py \
+    --model gat \
+    --epochs 50 \
+    --batch_size 32
+```
+
+**Training with Pre-computed Embeddings (e.g. MolCLR):**
+```bash
+python src/demec/training/train.py \
+    --model gat \
+    --epochs 50 \
+    --graphs_dir data/processed/graphs_molclr/ \
+    --feature_key emb \
+    --node_dim 300
+```
+
+---
+
+## Graph Inspection
+
+To verify the attributes and embeddings of your graph data:
+
+```bash
+python src/demec/utils/inspect_graph.py data/processed/graphs_molclr/100000085.gpickle
 ```
 
 ---
