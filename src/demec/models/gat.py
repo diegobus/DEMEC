@@ -4,42 +4,45 @@ import torch.nn.functional as F
 
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn import global_add_pool
-from torch_geometric.utils import softmax
-
-import torch_scatter
+from torch_geometric.utils import softmax, scatter
 
 
-class StructuralGAT(torch.nn.Module):
+class GATBackbone(torch.nn.Module):
     """
-    GAT using only graph structure
+    GAT backbone for graph embedding.
+    Supports configurable input dimension for node features.
     """
     def __init__(
         self,
         input_dim,
-        output_dim,
         hidden_dim,
         num_layers,
         heads,
+        output_dim=None,
         negative_slope=0.2,
         dropout=0.2,
         emb=False,
     ):
-        super(StructuralGAT, self).__init__()
+        super(GATBackbone, self).__init__()
         self.convs = nn.ModuleList()
         self.convs.append(GATLayer(input_dim, hidden_dim, heads=heads))
         for l in range(num_layers - 1):
             self.convs.append(GATLayer(heads * hidden_dim, hidden_dim, heads=heads))
 
-        # post-message-passing
-        self.post_mp = nn.Sequential(
-            nn.Linear(heads * hidden_dim, hidden_dim),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, output_dim),
-        )
+        # Project from multi-head output to hidden_dim
+        self.proj_heads = nn.Linear(heads * hidden_dim, hidden_dim)
+        
+        self.output_dim = output_dim
+        if output_dim is not None:
+            self.head = nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, output_dim),
+            )
+        else:
+            self.head = None
 
         self.dropout = dropout
         self.num_layers = num_layers
-
         self.emb = emb
 
     def forward(self, data):
@@ -51,12 +54,14 @@ class StructuralGAT(torch.nn.Module):
             x = F.dropout(x, p=self.dropout, training=self.training)
 
         x = global_add_pool(x, batch)
-        x = self.post_mp(x)
+        
+        # Project heads
+        x = self.proj_heads(x)
 
-        if self.emb == True:
+        if self.output_dim is None or self.emb == True:
             return x
-
-        return x
+            
+        return self.head(x)
 
 
 class GATLayer(MessagePassing):
@@ -118,6 +123,6 @@ class GATLayer(MessagePassing):
         return x_j * alpha.view(-1, self.heads, 1)
 
     def aggregate(self, inputs, index, dim_size=None):
-        return torch_scatter.scatter(
+        return scatter(
             inputs, index, dim=self.node_dim, dim_size=dim_size, reduce="sum"
         )
