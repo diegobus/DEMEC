@@ -95,12 +95,22 @@ class GraphStructureDataset(Dataset):
         # Attach targets for each task
         for task_name, cid_map in self.task_cid_maps.items():
             if cid in cid_map:
-                # Attach as y_{task_name}
-                # We also keep data.y for backward compatibility if it's side_effects
                 target = cid_map[cid].unsqueeze(0)
                 setattr(data, f"y_{task_name}", target)
+                setattr(data, f"mask_{task_name}", torch.tensor([True], dtype=torch.bool))
+                
+                # Backward compatibility
                 if task_name == 'side_effects':
                     data.y = target
+            else:
+                # Missing label: fill with zeros and mask out
+                dim = self.task_dims[task_name]
+                dummy = torch.zeros((1, dim), dtype=torch.float32)
+                setattr(data, f"y_{task_name}", dummy)
+                setattr(data, f"mask_{task_name}", torch.tensor([False], dtype=torch.bool))
+                
+                if task_name == 'side_effects':
+                    data.y = dummy
                     
         return data
 

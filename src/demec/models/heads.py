@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from demec.utils.losses import FocalLoss
 
 class PredictionHead(nn.Module):
     def __init__(
@@ -8,7 +9,8 @@ class PredictionHead(nn.Module):
         output_dim, 
         hidden_dims=[64], 
         dropout=0.2, 
-        task_type="classification"
+        task_type="classification",
+        loss_type="bce"
     ):
         """
         Args:
@@ -17,9 +19,11 @@ class PredictionHead(nn.Module):
             hidden_dims: List of hidden layer sizes for the MLP.
             dropout: Dropout rate.
             task_type: "classification" or "regression".
+            loss_type: "bce" or "focal".
         """
         super().__init__()
         self.task_type = task_type
+        self.loss_type = loss_type
         
         layers = []
         curr_dim = input_dim
@@ -38,6 +42,8 @@ class PredictionHead(nn.Module):
 
     def get_loss_func(self):
         if self.task_type == "classification":
+            if self.loss_type == "focal":
+                return FocalLoss(alpha=0.25, gamma=2.0)
             return nn.BCEWithLogitsLoss()
         elif self.task_type == "regression":
             return nn.MSELoss()

@@ -53,7 +53,9 @@ def main():
     # Define tasks configuration
     # ----- Add more tasks here ------
     task_config = {
-        'side_effects': cid_se_csv
+        'side_effects': cid_se_csv,
+        'atc': "data/processed/cid_atc_l3_matrix.csv",
+        'maccs': "data/processed/cid_maccs_matrix.csv"
     }
     
     print("Loading dataset...")
@@ -89,12 +91,17 @@ def main():
     
     for task_name, dim in dataset.task_dims.items():
         print(f"Initializing head for task: {task_name} (output_dim={dim})")
+        
+        # Use Focal Loss for side_effects to handle rare classes
+        loss_type = "focal" if task_name == "side_effects" else "bce"
+        
         head = PredictionHead(
             input_dim=args.hidden_dim,
             output_dim=dim,
             hidden_dims=[args.hidden_dim],
             dropout=args.dropout,
-            task_type="classification" # Assuming classification for now
+            task_type="classification",
+            loss_type=loss_type
         )
         heads_dict[task_name] = head
         loss_funcs[task_name] = head.get_loss_func()
@@ -119,8 +126,19 @@ def main():
             batch_loss = 0.0
             for task_name, logits in results.items():
                 target_attr = f"y_{task_name}"
+                mask_attr = f"mask_{task_name}"
+                
                 if hasattr(batch, target_attr):
                     target = getattr(batch, target_attr)
+                    
+                    # Apply mask if present
+                    if hasattr(batch, mask_attr):
+                        mask = getattr(batch, mask_attr).squeeze()
+                        if not mask.any():
+                            continue
+                        target = target[mask]
+                        logits = logits[mask]
+                    
                     loss = loss_funcs[task_name](logits, target)
                     batch_loss += loss
                     
@@ -148,8 +166,19 @@ def main():
                 batch_val_loss = 0.0
                 for task_name, logits in results.items():
                     target_attr = f"y_{task_name}"
+                    mask_attr = f"mask_{task_name}"
+                    
                     if hasattr(batch, target_attr):
                         target = getattr(batch, target_attr)
+                        
+                        # Apply mask if present
+                        if hasattr(batch, mask_attr):
+                            mask = getattr(batch, mask_attr).squeeze()
+                            if not mask.any():
+                                continue
+                            target = target[mask]
+                            logits = logits[mask]
+                            
                         loss = loss_funcs[task_name](logits, target)
                         batch_val_loss += loss
                         
