@@ -9,8 +9,12 @@ dependencies:
   - numpy
   - pandas
   - networkx>=3.0
+  - rdkit
   - scikit-learn
   - pytorch
   - pip:
       - torch-geometric
+      - pubchempy
+      - pysmiles
+      - pbr
       - -e .
