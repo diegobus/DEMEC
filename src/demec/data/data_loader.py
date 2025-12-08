@@ -62,6 +62,23 @@ class GraphStructureDataset(Dataset):
         cid, full_file = self.items[idx]
         with open(full_file, "rb") as f:
             G = pickle.load(f)
+
+        # Standardize attributes to ensure consistency for PyG batching
+        if len(G.nodes) > 0:
+            if self.feature_key:
+                for _, data_dict in G.nodes(data=True):
+                    keys_to_remove = [k for k in data_dict if k != self.feature_key]
+                    for k in keys_to_remove:
+                        del data_dict[k]
+            else:
+                for _, data_dict in G.nodes(data=True):
+                    data_dict.clear()
+
+        # Remove edge attributes as they are unused and can cause batching errors
+        if len(G.edges) > 0:
+            for u, v, d in G.edges(data=True):
+                d.clear()
+
         data = from_networkx(G)
         
         if self.feature_key and self.feature_key in G.nodes[list(G.nodes)[0]]:
