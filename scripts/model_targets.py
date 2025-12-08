@@ -30,11 +30,11 @@ def compile_table(edges: pd.DataFrame) -> pd.DataFrame:
 if __name__ == "__main__":
     
     if len(sys.argv) < 3:
-        print("Usage: python src/scripts/compile_table.py <input_edges.csv> <output_labels.csv>")
+        print("Usage: python scripts/model_targets.py <input_edges.csv> <output_labels.csv>")
         sys.exit(1)
     
     input_path = sys.argv[1]
     output_path = sys.argv[2]
-    edges = pd.read_csv(input_path)
+    edges = pd.read_csv(input_path, dtype={"cid": str, "se_id": str})
     mat = compile_table(edges)
     mat.to_csv(output_path, index=False)

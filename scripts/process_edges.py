@@ -23,7 +23,7 @@ def load_se():
     # keep only PT (preferred terms) to remove LLTs
     df = df[df["term_type"] == "PT"].copy()
     # extract PubChem CID digits from STITCH id
-    df["cid"] = df["stitch_flat"].str.extract(r"(\d+)$")
+    df["cid"] = df["stitch_flat"].str.extract(r"CID10*([1-9]\d*)$")
     # drop rows with missing cid or se_id
     df = df.dropna(subset=["cid", "se_id"])
     # enforce string type
@@ -53,7 +53,7 @@ def load_freq():
     df = pd.read_csv(SIDER_DIR / "meddra_freq.tsv", sep="\t", names=cols)
     # keep PT rows to align with PT mapping
     df = df[df["term_type"] == "PT"].copy()
-    df["cid"] = df["stitch_flat"].str.extract(r"(\d+)$")
+    df["cid"] = df["stitch_flat"].str.extract(r"CID10*([1-9]\d*)$")
     df = df.dropna(subset=["cid", "se_id"])
     df["cid"] = df["cid"].astype(str)
     df["se_id"] = df["se_id"].astype(str)

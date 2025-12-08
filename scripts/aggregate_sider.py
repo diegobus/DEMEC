@@ -14,7 +14,7 @@ try:
 except Exception:
     RDKit_AVAILABLE = False
 
-CID_RE = re.compile(r"(\d+)$")
+CID_RE = re.compile(r"CID10*([1-9]\d*)$")
 
 # ---- Config: where to cache -------------------------------------------------
 CACHE_DIR = "data/processed"
