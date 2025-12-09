@@ -399,7 +399,7 @@ def build_graphs(
     
     # Summary
     print("-" * 80)
-    print(f"✅ Finished!")
+    print(f"DONE")
     print(f"  SMILES cached: {sum(1 for d in drugs if d.smiles_sanitized)}/{len(drugs)}")
     print(f"  Graphs built: {sum(1 for d in drugs if d.graph_path)}/{len(drugs)}")
     print(f"  Output: {output_dir}")

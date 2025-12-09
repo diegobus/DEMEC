@@ -10,7 +10,8 @@ class PredictionHead(nn.Module):
         hidden_dims=[64], 
         dropout=0.2, 
         task_type="classification",
-        loss_type="bce"
+        loss_type="bce",
+        focal_alpha=0.25
     ):
         """
         Args:
@@ -20,10 +21,12 @@ class PredictionHead(nn.Module):
             dropout: Dropout rate.
             task_type: "classification" or "regression".
             loss_type: "bce" or "focal".
+            focal_alpha: Alpha parameter for Focal Loss (default: 0.25).
         """
         super().__init__()
         self.task_type = task_type
         self.loss_type = loss_type
+        self.focal_alpha = focal_alpha
         
         layers = []
         curr_dim = input_dim
@@ -43,7 +46,7 @@ class PredictionHead(nn.Module):
     def get_loss_func(self):
         if self.task_type == "classification":
             if self.loss_type == "focal":
-                return FocalLoss(alpha=0.25, gamma=2.0)
+                return FocalLoss(alpha=self.focal_alpha, gamma=2.0)
             return nn.BCEWithLogitsLoss()
         elif self.task_type == "regression":
             return nn.MSELoss()
