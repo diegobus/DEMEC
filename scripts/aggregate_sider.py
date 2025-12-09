@@ -5,21 +5,37 @@ import pubchempy as pcp
 import networkx as nx
 import pysmiles as psm
 import pickle
+from rdkit import Chem
+from rdkit.Chem import rdchem
+from rdkit.Chem import AllChem
+import numpy as np
+from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
-# Optional RDKit for proper sanitization
-try:
-    from rdkit import Chem
-
-    RDKit_AVAILABLE = True
-except Exception:
-    RDKit_AVAILABLE = False
 
 CID_RE = re.compile(r"CID10*([1-9]\d*)$")
+RDKit_AVAILABLE = True
+
+# ---- Categorical Variables ----------------------------------------
+
+ATOM_LIST = list(range(1, 119))  # atomic numbers 1..118
+CHIRALITY_LIST = [
+    rdchem.ChiralType.CHI_UNSPECIFIED,
+    rdchem.ChiralType.CHI_TETRAHEDRAL_CW,
+    rdchem.ChiralType.CHI_TETRAHEDRAL_CCW,
+    rdchem.ChiralType.CHI_OTHER,
+]
+HYBRID_LIST = [
+    rdchem.HybridizationType.SP,
+    rdchem.HybridizationType.SP2,
+    rdchem.HybridizationType.SP3,
+    rdchem.HybridizationType.SP3D,
+    rdchem.HybridizationType.SP3D2,
+]
 
 # ---- Config: where to cache -------------------------------------------------
 CACHE_DIR = "data/processed"
 SMILES_CACHE = os.path.join(CACHE_DIR, "smiles_cache.csv")
-GRAPH_DIR = os.path.join(CACHE_DIR, "graphs")  # one file per CID: <cid>.gpickle
+GRAPH_DIR = os.path.join(CACHE_DIR, "graphs_v2")  # one file per CID: <cid>.gpickle
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(GRAPH_DIR, exist_ok=True)
@@ -101,11 +117,93 @@ def sanitize_smiles(smiles: Optional[str]) -> Optional[str]:
     return smiles.replace("/", "").replace("\\", "")
 
 
-def smiles_to_nx(smiles: str) -> Optional[nx.Graph]:
+# ---- Atom features --------------------------------------------
+
+def one_hot(x, choices):
+    vec = [0] * (len(choices) + 1)
     try:
-        return psm.read_smiles(smiles)
-    except Exception:
+        idx = choices.index(x)
+    except ValueError:
+        idx = len(choices)
+    vec[idx] = 1
+    return vec
+
+def atom_features(atom: rdchem.Atom) -> np.ndarray:
+    """One hot encoding of different atom features"""
+    feats = []
+
+    # element - see the list above 
+    feats += one_hot(atom.GetAtomicNum(), ATOM_LIST)
+
+    # degree, formal charge, and valence, aromatic, ring, Hs
+    feats += one_hot(atom.GetTotalDegree(), list(range(0, 6)))      
+    feats += one_hot(atom.GetFormalCharge(), [-2, -1, 0, 1, 2])     
+    feats += one_hot(atom.GetTotalValence(), list(range(0, 7)))   
+    feats.append(int(atom.GetIsAromatic()))
+    feats.append(int(atom.IsInRing()))
+    feats.append(atom.GetTotalNumHs(includeNeighbors=True))
+
+    # hybridization & chirality - see the lists above
+    feats += one_hot(atom.GetHybridization(), HYBRID_LIST)
+    feats += one_hot(atom.GetChiralTag(), CHIRALITY_LIST)
+
+    return np.asarray(feats, dtype=np.float32)
+
+def atom_env_fp(morgan_gen, mol, atom_idx):
+    """Per-atom Morgan fingerprint"""
+    fp_np = morgan_gen.GetFingerprintAsNumPy(mol, fromAtoms=[atom_idx])
+    return fp_np.astype(np.float32)
+
+# ---- Create graphs with features --------------------------------------------
+
+def smiles_to_nx(smiles: str) -> Optional[nx.Graph]:
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        print(f"Molecule with SMILES: {smiles} failed.")
         return None
+
+    G = nx.Graph()
+    G.graph["smiles"] = smiles
+
+    # Add nodes with chemical features
+    for atom in mol.GetAtoms():
+        idx = atom.GetIdx()
+        feats = atom_features(atom)  
+
+        morgan_gen = GetMorganGenerator(radius=2, fpSize=128)
+        morgan_fp = atom_env_fp(morgan_gen, mol, idx)
+
+        G.add_node(
+            idx,
+            x=feats,
+            fp=morgan_fp,                         
+            atomic_num=atom.GetAtomicNum(),
+            symbol=atom.GetSymbol(),
+            degree=atom.GetTotalDegree(),
+            is_aromatic=atom.GetIsAromatic(),
+            in_ring=atom.IsInRing(),
+        )
+
+    # Add edges
+    for bond in mol.GetBonds():
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+
+        G.add_edge(
+            i,
+            j,
+            bond_type=str(bond.GetBondType()),
+            bond_dir=str(bond.GetBondDir()),
+            )
+    
+    return G
+
+
+# def smiles_to_nx(smiles: str) -> Optional[nx.Graph]: 
+#     try: 
+#         return psm.read_smiles(smiles) 
+#     except Exception: 
+#         return None
 
 
 # ---- Main pipeline with caching --------------------------------------------
