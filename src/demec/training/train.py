@@ -2,6 +2,7 @@ import sys
 import os
 import argparse
 import torch
+import yaml
 from torch_geometric.loader import DataLoader
 
 from demec.data.data_loader import GraphStructureDataset, make_splits
@@ -11,79 +12,101 @@ from demec.models.gat import GATBackbone
 from demec.models.multitask import MultiTaskGNN
 from demec.models.heads import PredictionHead
 
+def load_config(config_path):
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
 def main():
     parser = argparse.ArgumentParser(description="Train Graph Models (GCN or GAT)")
     
-    # Model selection
-    parser.add_argument("--model", type=str, required=True, choices=["gcn", "gat"], 
-                        help="Model architecture to use")
+    # Config file argument
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
     
-    # Training hyperparameters
-    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    
-    # Data hyperparameters
-    parser.add_argument("--graphs_dir", type=str, default="data/processed/graphs/", 
-                        help="Relative path to graphs directory")
-    parser.add_argument("--feature_key", type=str, default=None, 
-                        help="Key for node features in graph objects (e.g., 'emb')")
-
-    # Model hyperparameters
-    parser.add_argument("--node_dim", type=int, default=1, help="Dimension of node features")
-    parser.add_argument("--hidden_dim", type=int, default=64, help="Hidden dimension size")
-    parser.add_argument("--num_layers", type=int, default=5, help="Number of GNN layers")
-    parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate")
-    parser.add_argument("--heads", type=int, default=3, help="Number of attention heads (GAT only)")
+    # Optional CLI overrides (can override config values)
+    parser.add_argument("--model", type=str, choices=["gcn", "gat"], help="Model architecture")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, help="Batch size")
+    parser.add_argument("--lr", type=float, help="Learning rate")
+    parser.add_argument("--seed", type=int, help="Random seed")
+    parser.add_argument("--device", type=str, default=None, help="Device (cpu/cuda)")
     
     args = parser.parse_args()
     
-    print(f"Configuration: {args}")
+    # Load configuration
+    config = load_config(args.config)
+    
+    # Override config with CLI args if provided
+    if args.model: config['model']['architecture'] = args.model
+    if args.epochs: config['training']['epochs'] = args.epochs
+    if args.batch_size: config['training']['batch_size'] = args.batch_size
+    if args.lr: config['training']['lr'] = args.lr
+    if args.seed: config['training']['seed'] = args.seed
+    
+    print(f"Loaded Configuration: {config}")
+    
+    # Extract params for cleaner code
+    model_cfg = config['model']
+    train_cfg = config['training']
+    data_cfg = config['data']
+    
+    # Set seed
+    torch.manual_seed(train_cfg['seed'])
     
     # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Data Loading
-    # Assuming we run from the project root
-    graphs_dir = args.graphs_dir
-    cid_se_csv = "data/processed/cid_se_matrix.csv"
+    graphs_dir = data_cfg['graphs_dir']
     
-    # Define tasks configuration
-    # ----- Add more tasks here ------
-    task_config = {
-        'side_effects': cid_se_csv,
-        'atc': "data/processed/cid_atc_l3_matrix.csv",
-        'maccs': "data/processed/cid_maccs_matrix.csv"
-    }
+    # Define tasks configuration from YAML
+    task_config = data_cfg.get('tasks', {})
+    if not task_config:
+        print("Warning: No tasks defined in configuration!")
     
     print("Loading dataset...")
-    dataset = GraphStructureDataset(graphs_dir, task_config=task_config, node_dim=args.node_dim, feature_key=args.feature_key)
-    train_ds, val_ds, test_ds = make_splits(dataset, train=0.8, val=0.1, seed=args.seed)
+    # Handle optional feature_key
+    feature_key = data_cfg.get('feature_key', None)
+    
+    dataset = GraphStructureDataset(graphs_dir, task_config=task_config, 
+                                    node_dim=model_cfg['node_dim'], 
+                                    feature_key=feature_key)
+    
+    train_ds, val_ds, test_ds = make_splits(dataset, train=0.8, val=0.1, seed=train_cfg['seed'])
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size)
+    train_loader = DataLoader(train_ds, batch_size=train_cfg['batch_size'], shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=train_cfg['batch_size'])
+    test_loader = DataLoader(test_ds, batch_size=train_cfg['batch_size'])
 
     # Initialize Backbone
-    if args.model == "gcn":
+    architecture = model_cfg['architecture']
+    hidden_dim = model_cfg['hidden_dim']
+    num_layers = model_cfg['num_layers']
+    dropout = model_cfg['dropout']
+    
+    if architecture == "gcn":
         backbone = GCNBackbone(
-            input_dim=args.node_dim,
+            input_dim=model_cfg['node_dim'],
             out_dim=None, # Return embeddings
-            hidden_dim=args.hidden_dim, 
-            num_layers=args.num_layers, 
-            dropout=args.dropout
+            hidden_dim=hidden_dim, 
+            num_layers=num_layers, 
+            dropout=dropout
         )
-    elif args.model == "gat":
+    elif architecture == "gat":
         backbone = GATBackbone(
-            input_dim=args.node_dim,
+            input_dim=model_cfg['node_dim'],
             output_dim=None, # Return embeddings
-            hidden_dim=args.hidden_dim,
-            num_layers=args.num_layers,
-            heads=args.heads,
-            dropout=args.dropout
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            heads=model_cfg.get('heads', 1),
+            dropout=dropout
         )
+    else:
+        raise ValueError(f"Unknown model architecture: {architecture}")
     
     # Initialize Heads
     heads_dict = {}
@@ -93,13 +116,14 @@ def main():
         print(f"Initializing head for task: {task_name} (output_dim={dim})")
         
         # Use Focal Loss for side_effects to handle rare classes
+        # This logic is kept from original script, but could be moved to config in future
         loss_type = "focal" if task_name == "side_effects" else "bce"
         
         head = PredictionHead(
-            input_dim=args.hidden_dim,
+            input_dim=hidden_dim,
             output_dim=dim,
-            hidden_dims=[args.hidden_dim],
-            dropout=args.dropout,
+            hidden_dims=[hidden_dim],
+            dropout=dropout,
             task_type="classification",
             loss_type=loss_type
         )
@@ -109,11 +133,11 @@ def main():
     model = MultiTaskGNN(backbone, heads_dict)
     model = model.to(device)
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg['lr'])
 
-    print(f"Starting training loop for {args.epochs} epochs...")
+    print(f"Starting training loop for {train_cfg['epochs']} epochs...")
 
-    for epoch in range(args.epochs):
+    for epoch in range(train_cfg['epochs']):
         model.train()
         total_train_loss = 0.0
         total_recall = 0.0 # Specifically for side_effects
