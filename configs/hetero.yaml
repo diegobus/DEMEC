@@ -17,6 +17,7 @@ training:
   checkpoint_dir: "checkpoints"
 
 data:
+  hetero: true         # Use heterogeneous graphs with bond-type-specific edges
   graphs_dir: "data/processed/graphs_v2/"
   feature_key: "x"     # Key for node features in hetero graphs
   tasks_enabled: "side_effects,atc,maccs,molprops"  # Comma-separated list of tasks

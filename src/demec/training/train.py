@@ -237,10 +237,6 @@ def main():
     # Config file argument
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
 
-    # Graph type selection
-    parser.add_argument("--hetero", action="store_true",
-                        help="Use heterogeneous graphs with bond-type-specific edges")
-
     # Optional CLI overrides (can override config values)
     parser.add_argument("--model", type=str, choices=["gcn", "gat"], help="Model architecture")
     parser.add_argument("--epochs", type=int, help="Number of training epochs")
@@ -296,7 +292,7 @@ def main():
     cfg.num_layers = args.num_layers if args.num_layers else model_cfg.get('num_layers', 5)
     cfg.dropout = args.dropout if args.dropout else model_cfg.get('dropout', 0.2)
     cfg.heads = args.heads if args.heads else model_cfg.get('heads', 3)
-    cfg.hetero = args.hetero
+    cfg.hetero = data_cfg.get('hetero', False)  # Read from config, not CLI
     cfg.focal_alpha = args.focal_alpha
     cfg.clip_grad_norm = args.clip_grad_norm
     cfg.save_model = args.save_model
