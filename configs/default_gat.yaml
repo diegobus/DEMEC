@@ -14,9 +14,6 @@ training:
   seed: 42
 
 data:
-  hetero: true
   # max_side_effects: 200
-  graphs_dir: "data/processed/graphs_v2/"
-  feature_key: "atom_features"
   train_tasks: "side_effects,atc,maccs"
   eval_tasks: "side_effects"

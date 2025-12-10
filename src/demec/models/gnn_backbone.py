@@ -1,166 +1,136 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, global_add_pool
-from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import softmax, scatter
+from torch_geometric.nn import HeteroConv, GATConv, GCNConv, global_mean_pool
+from torch_geometric.data import HeteroData
 
 
 class GNNBackbone(nn.Module):
     """
-    Unified GNN backbone supporting both GCN and GAT architectures.
-    Returns graph-level embeddings for downstream tasks.
+    GNN backbone that handles different bond types as edge types.
+    Uses HeteroConv to apply different message passing for each bond type.
     """
     
     def __init__(
         self,
         input_dim,
-        hidden_dim,
-        num_layers,
-        conv_type='gcn',
-        heads=3,
-        output_dim=None,
+        hidden_dim=64,
+        num_layers=5,
         dropout=0.2,
-        negative_slope=0.2
+        conv_type='gat',
+        heads=3
     ):
-        """
-        Args:
-            input_dim: Input node feature dimension
-            hidden_dim: Hidden dimension size
-            num_layers: Number of GNN layers
-            conv_type: 'gcn' or 'gat'
-            heads: Number of attention heads (GAT only)
-            output_dim: Output dimension (None returns embeddings)
-            dropout: Dropout rate
-            negative_slope: LeakyReLU negative slope (GAT only)
-        """
         super().__init__()
-        
-        self.conv_type = conv_type
+        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.dropout = dropout
-        self.output_dim = output_dim
+        self.conv_type = conv_type
+        self.heads = heads
         
-        # Build convolutional layers
+        # Bond types we expect
+        self.bond_types = ['SINGLE', 'DOUBLE', 'TRIPLE', 'AROMATIC']
+        
+        # Input projection
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        
+        # Heterogeneous convolution layers
         self.convs = nn.ModuleList()
+        self.norms = nn.ModuleList()
         
-        if conv_type == 'gcn':
-            self.convs.append(GCNConv(input_dim, hidden_dim, add_self_loops=True, normalize=True))
-            for _ in range(num_layers - 1):
-                self.convs.append(GCNConv(hidden_dim, hidden_dim, add_self_loops=True, normalize=True))
-        
-        elif conv_type == 'gat':
-            self.convs.append(GATLayer(input_dim, hidden_dim, heads=heads, negative_slope=negative_slope))
-            for _ in range(num_layers - 1):
-                self.convs.append(GATLayer(heads * hidden_dim, hidden_dim, heads=heads, negative_slope=negative_slope))
+        for i in range(num_layers):
+            conv_dict = {}
             
-            # Project multi-head output to hidden_dim
-            self.proj_heads = nn.Linear(heads * hidden_dim, hidden_dim)
+            for bond_type in self.bond_types:
+                edge_type = ('atom', bond_type, 'atom')
+                
+                if conv_type == 'gat':
+                    # Use concat=False to get mean aggregation instead of concat
+                    # This keeps output dimension = hidden_dim
+                    conv_dict[edge_type] = GATConv(
+                        hidden_dim,
+                        hidden_dim,
+                        heads=heads,
+                        concat=False,
+                        dropout=dropout,
+                        add_self_loops=False
+                    )
+                elif conv_type == 'gcn':
+                    conv_dict[edge_type] = GCNConv(
+                        hidden_dim,
+                        hidden_dim,
+                        add_self_loops=False
+                    )
+            
+            self.convs.append(HeteroConv(conv_dict, aggr='sum'))
+            self.norms.append(nn.LayerNorm(hidden_dim))
         
-        else:
-            raise ValueError(f"Unknown conv_type: {conv_type}. Choose 'gcn' or 'gat'.")
-        
-        # Optional output head
-        if output_dim is not None:
-            self.head = nn.Sequential(
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, output_dim)
-            )
-        else:
-            self.head = None
-    
-    def forward(self, data):
+        self.dropout_layer = nn.Dropout(dropout)
+
+    def forward(self, data: HeteroData):
         """
-        Forward pass through GNN layers and pooling.
+        Forward pass for heterogeneous graph.
         
         Args:
-            data: PyG Data object with x, edge_index, batch
+            data: HeteroData object with 'atom' nodes and bond-typed edges
             
         Returns:
-            Graph-level embeddings or predictions
+            Graph-level embedding tensor of shape (batch_size, hidden_dim)
         """
-        x, edge_index, batch = data.x, data.edge_index, data.batch
+        x_dict = {'atom': self.input_proj(data['atom'].x)}
         
-        # Apply convolutional layers
-        for conv in self.convs:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            x = F.dropout(x, p=self.dropout, training=self.training)
+        # Build edge_index_dict from available edge types in the batch
+        edge_index_dict = {}
+        for edge_type in data.edge_types:
+            if hasattr(data[edge_type], 'edge_index'):
+                edge_index_dict[edge_type] = data[edge_type].edge_index
+        
+        # Apply heterogeneous convolutions
+        for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
+            x_dict_new = conv(x_dict, edge_index_dict)
+            
+            # Handle case where no edges exist (HeteroConv returns empty dict)
+            if 'atom' in x_dict_new:
+                x_dict['atom'] = norm(x_dict_new['atom'])
+                x_dict['atom'] = torch.relu(x_dict['atom'])
+                x_dict['atom'] = self.dropout_layer(x_dict['atom'])
+            # If no edges, keep previous features (skip this layer)
         
         # Global pooling
-        x = global_add_pool(x, batch)
+        x = x_dict['atom']
         
-        # Project GAT heads if needed
-        if self.conv_type == 'gat':
-            x = self.proj_heads(x)
+        # Handle batching
+        if hasattr(data['atom'], 'batch'):
+            batch = data['atom'].batch
+        else:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
         
-        # Return embeddings or apply output head
-        if self.output_dim is None:
-            return x
+        # Global mean pooling
+        graph_emb = global_mean_pool(x, batch)
         
-        return self.head(x)
+        return graph_emb
 
 
-class GATLayer(MessagePassing):
+class MultiTaskGNN(nn.Module):
     """
-    Graph Attention Layer with multi-head attention.
-    Adapted from CS224W, Colab 4 in Fall 2025.
+    Multi-task GNN with separate prediction heads.
     """
     
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        heads=2,
-        negative_slope=0.2,
-        dropout=0.0,
-        **kwargs
-    ):
-        super().__init__(node_dim=0, **kwargs)
-        
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.heads = heads
-        self.negative_slope = negative_slope
-        self.dropout = dropout
-        
-        self.lin_l = nn.Linear(in_channels, out_channels * heads)
-        self.lin_r = self.lin_l
-        self.att_l = nn.Parameter(torch.Tensor(heads, out_channels))
-        self.att_r = nn.Parameter(torch.Tensor(heads, out_channels))
-        
-        self.reset_parameters()
+    def __init__(self, backbone, heads_dict):
+        super().__init__()
+        self.backbone = backbone
+        self.heads = nn.ModuleDict(heads_dict)
     
-    def reset_parameters(self):
-        nn.init.xavier_uniform_(self.lin_l.weight)
-        nn.init.xavier_uniform_(self.lin_r.weight)
-        nn.init.xavier_uniform_(self.att_l)
-        nn.init.xavier_uniform_(self.att_r)
-    
-    def forward(self, x, edge_index, size=None):
-        H, C = self.heads, self.out_channels
+    def forward(self, data: HeteroData):
+        """
+        Forward pass through backbone and all task heads.
         
-        x_l = self.lin_l(x).view(-1, H, C)
-        x_r = self.lin_r(x).view(-1, H, C)
+        Returns:
+            Dictionary mapping task names to predictions
+        """
+        graph_emb = self.backbone(data)
         
-        alpha_l = (x_l * self.att_l).sum(dim=-1)
-        alpha_r = (x_r * self.att_r).sum(dim=-1)
+        results = {}
+        for task_name, head in self.heads.items():
+            results[task_name] = head(graph_emb)
         
-        out = self.propagate(
-            edge_index, x=(x_l, x_r), alpha=(alpha_l, alpha_r), size=size
-        )
-        out = out.view(-1, H * C)
-        
-        return out
-    
-    def message(self, x_j, alpha_j, alpha_i, index, ptr, size_i):
-        alpha = F.leaky_relu(alpha_i + alpha_j, self.negative_slope)
-        alpha = softmax(alpha, index, ptr, size_i)
-        alpha = F.dropout(alpha, p=self.dropout, training=self.training)
-        return x_j * alpha.view(-1, self.heads, 1)
-    
-    def aggregate(self, inputs, index, dim_size=None):
-        return scatter(
-            inputs, index, dim=self.node_dim, dim_size=dim_size, reduce="sum"
-        )
+        return results

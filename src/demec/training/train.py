@@ -5,13 +5,10 @@ import torch
 import yaml
 from torch_geometric.loader import DataLoader
 
-from demec.data.data_loader import GraphStructureDataset, make_splits as make_splits_homo
-from demec.data.hetero_data_loader import HeteroGraphDataset, make_splits as make_splits_hetero
+from demec.data.data_loader import GraphDataset, make_splits
 from demec.utils.eval_metrics import comprehensive_metrics
 from demec.utils.logger import ExperimentLogger, format_metrics_string, format_task_losses
-from demec.models.gnn_backbone import GNNBackbone
-from demec.models.hetero_gnn import HeteroGNNBackbone, HeteroMultiTaskGNN
-from demec.models.multitask import MultiTaskGNN
+from demec.models.gnn_backbone import GNNBackbone, MultiTaskGNN
 from demec.models.heads import PredictionHead
 
 
@@ -94,30 +91,17 @@ def setup_model(dataset, args, device):
         else:
             task_weights[task_name] = 0.0  # No contribution to loss
 
-    # Create backbone based on graph type
-    if args.hetero:
-        print(f"\nInitializing {args.model.upper()} heterogeneous backbone...")
-        backbone = HeteroGNNBackbone(
-            input_dim=args.input_dim,
-            hidden_dim=args.hidden_dim,
-            num_layers=args.num_layers,
-            dropout=args.dropout,
-            conv_type=args.model,
-            heads=args.heads
-        )
-        model = HeteroMultiTaskGNN(backbone, heads_dict)
-    else:
-        print(f"\nInitializing {args.model.upper()} homogeneous backbone...")
-        backbone = GNNBackbone(
-            input_dim=args.input_dim,
-            hidden_dim=args.hidden_dim,
-            num_layers=args.num_layers,
-            dropout=args.dropout,
-            conv_type=args.model,
-            heads=args.heads,
-            output_dim=None
-        )
-        model = MultiTaskGNN(backbone, heads_dict)
+    # Create backbone
+    print(f"\nInitializing {args.model.upper()} backbone...")
+    backbone = GNNBackbone(
+        input_dim=args.input_dim,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
+        conv_type=args.model,
+        heads=args.heads
+    )
+    model = MultiTaskGNN(backbone, heads_dict)
 
     return model.to(device), loss_funcs, task_weights, train_tasks, eval_tasks
 
@@ -295,7 +279,6 @@ def train_model(config, device_str=None):
     cfg.num_layers = model_cfg.get('num_layers', 5)
     cfg.dropout = model_cfg.get('dropout', 0.2)
     cfg.heads = model_cfg.get('heads', 3)
-    cfg.hetero = data_cfg.get('hetero', False)
     cfg.max_side_effects = data_cfg.get('max_side_effects', None)
     cfg.focal_alpha = None
     cfg.clip_grad_norm = None
@@ -309,15 +292,10 @@ def train_model(config, device_str=None):
     cfg.train_tasks = data_cfg.get('train_tasks', data_cfg.get('tasks_enabled', 'side_effects,atc,maccs'))
     cfg.eval_tasks = data_cfg.get('eval_tasks', cfg.train_tasks)  # Default to same as train_tasks
 
-    # Auto-detect graph directory and input dimension based on graph type
-    if cfg.hetero:
-        cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
-        cfg.input_dim = model_cfg.get('input_dim', 154)
-        cfg.feature_key = data_cfg.get('feature_key', 'x')
-    else:
-        cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs/')
-        cfg.input_dim = model_cfg.get('node_dim', model_cfg.get('input_dim', 1))
-        cfg.feature_key = data_cfg.get('feature_key', None)
+    # Graph configuration (always heterogeneous)
+    cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
+    cfg.input_dim = model_cfg.get('input_dim', 154)
+    cfg.feature_key = data_cfg.get('feature_key', 'atom_features')
 
     # Set seed
     torch.manual_seed(cfg.seed)
@@ -336,24 +314,14 @@ def train_model(config, device_str=None):
         'molprops': "data/processed/cid_molprops_matrix.csv"
     }
 
-    # Load dataset based on graph type
-    if cfg.hetero:
-        dataset = HeteroGraphDataset(
-            cfg.graphs_dir,
-            task_config=task_config,
-            feature_key=cfg.feature_key,
-            max_side_effects=cfg.max_side_effects
-        )
-        train_ds, val_ds, test_ds = make_splits_hetero(dataset, train=0.8, val=0.1, seed=cfg.seed)
-    else:
-        dataset = GraphStructureDataset(
-            cfg.graphs_dir,
-            task_config=task_config,
-            node_dim=cfg.input_dim,
-            feature_key=cfg.feature_key,
-            max_side_effects=cfg.max_side_effects
-        )
-        train_ds, val_ds, test_ds = make_splits_homo(dataset, train=0.8, val=0.1, seed=cfg.seed)
+    # Load dataset
+    dataset = GraphDataset(
+        cfg.graphs_dir,
+        task_config=task_config,
+        feature_key=cfg.feature_key,
+        max_side_effects=cfg.max_side_effects
+    )
+    train_ds, val_ds, test_ds = make_splits(dataset, train=0.8, val=0.1, seed=cfg.seed)
 
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=cfg.batch_size)
@@ -443,7 +411,6 @@ def main():
     cfg.num_layers = args.num_layers if args.num_layers else model_cfg.get('num_layers', 5)
     cfg.dropout = args.dropout if args.dropout else model_cfg.get('dropout', 0.2)
     cfg.heads = args.heads if args.heads else model_cfg.get('heads', 3)
-    cfg.hetero = data_cfg.get('hetero', False)  # Read from config, not CLI
     cfg.max_side_effects = data_cfg.get('max_side_effects', None)
     cfg.focal_alpha = args.focal_alpha
     cfg.clip_grad_norm = args.clip_grad_norm
@@ -464,19 +431,13 @@ def main():
         cfg.train_tasks = data_cfg.get('train_tasks', data_cfg.get('tasks_enabled', 'side_effects,atc,maccs'))
         cfg.eval_tasks = data_cfg.get('eval_tasks', cfg.train_tasks)
 
-    # Auto-detect graph directory and input dimension based on graph type
-    if cfg.hetero:
-        cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
-        cfg.input_dim = model_cfg.get('input_dim', 154)
-        cfg.feature_key = data_cfg.get('feature_key', 'x')
-    else:
-        cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs/')
-        cfg.input_dim = model_cfg.get('node_dim', model_cfg.get('input_dim', 1))
-        cfg.feature_key = data_cfg.get('feature_key', None)
+    # Graph configuration (always heterogeneous)
+    cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
+    cfg.input_dim = model_cfg.get('input_dim', 154)
+    cfg.feature_key = data_cfg.get('feature_key', 'atom_features')
 
     print(f"Loaded Configuration: {config}")
     print(f"Final Config: {vars(cfg)}")
-    print(f"Graph Type: {'Heterogeneous' if cfg.hetero else 'Homogeneous'}")
 
     # Set seed
     torch.manual_seed(cfg.seed)
@@ -496,25 +457,15 @@ def main():
         'molprops': "data/processed/cid_molprops_matrix.csv"
     }
 
-    # Load dataset based on graph type
-    print(f"Loading {'heterogeneous' if cfg.hetero else 'homogeneous'} graph dataset...")
-    if cfg.hetero:
-        dataset = HeteroGraphDataset(
-            cfg.graphs_dir,
-            task_config=task_config,
-            feature_key=cfg.feature_key,
-            max_side_effects=cfg.max_side_effects
-        )
-        train_ds, val_ds, test_ds = make_splits_hetero(dataset, train=0.8, val=0.1, seed=cfg.seed)
-    else:
-        dataset = GraphStructureDataset(
-            cfg.graphs_dir,
-            task_config=task_config,
-            node_dim=cfg.input_dim,
-            feature_key=cfg.feature_key,
-            max_side_effects=cfg.max_side_effects
-        )
-        train_ds, val_ds, test_ds = make_splits_homo(dataset, train=0.8, val=0.1, seed=cfg.seed)
+    # Load dataset
+    print(f"Loading graph dataset...")
+    dataset = GraphDataset(
+        cfg.graphs_dir,
+        task_config=task_config,
+        feature_key=cfg.feature_key,
+        max_side_effects=cfg.max_side_effects
+    )
+    train_ds, val_ds, test_ds = make_splits(dataset, train=0.8, val=0.1, seed=cfg.seed)
 
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=cfg.batch_size)

@@ -28,11 +28,10 @@ class ExperimentLogger:
         # Generate experiment name if not provided
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if args.exp_name is None:
-            graph_type = "hetero" if args.hetero else "homo"
             # Use train_tasks for experiment name
             train_tasks = getattr(args, 'train_tasks', getattr(args, 'tasks', 'unknown'))
             tasks_str = "_".join(train_tasks.split(',')[:2])  # First 2 tasks
-            self.exp_name = f"{graph_type}_{args.model}_{tasks_str}_{timestamp}"
+            self.exp_name = f"{args.model}_{tasks_str}_{timestamp}"
         else:
             # Use provided experiment name with timestamp
             self.exp_name = f"{args.exp_name}_{timestamp}"
@@ -57,7 +56,6 @@ class ExperimentLogger:
         """
         hparams = {
             'model': self.args.model,
-            'hetero': self.args.hetero,
             'hidden_dim': self.args.hidden_dim,
             'num_layers': self.args.num_layers,
             'dropout': self.args.dropout,

@@ -3,21 +3,23 @@ import os
 import torch
 from torch.utils.data import Dataset, random_split
 import networkx as nx
-from torch_geometric.data import Data
 import pickle
-from torch_geometric.utils import from_networkx
+from torch_geometric.data import HeteroData
 import numpy as np
 
 
-class GraphStructureDataset(Dataset):
+class GraphDataset(Dataset):
+    """
+    Dataset for molecular graphs with typed edges.
+    Converts NetworkX graphs to PyG HeteroData with bond types as edge types.
+    """
 
-    def __init__(self, graph_dir, cid_se_csv=None, task_config=None, node_dim=1, feature_key=None, max_side_effects=None):
-
+    def __init__(self, graph_dir, cid_se_csv=None, task_config=None, feature_key='x', max_side_effects=None):
         super().__init__()
         self.graph_dir = graph_dir
         self.feature_key = feature_key
 
-        # task_config should be {task_name: csv_path}
+        # Task configuration
         self.task_configs = {}
         if cid_se_csv:
             self.task_configs['side_effects'] = cid_se_csv
@@ -56,14 +58,12 @@ class GraphStructureDataset(Dataset):
             else:
                 self.task_dims[task_name] = len(df.columns)
 
-            # Create mapping
             cid_map = {
                 int(cid): torch.tensor(row.values, dtype=torch.float32)
                 for cid, row in df.iterrows()
             }
             self.task_cid_maps[task_name] = cid_map
 
-            # Keep backward compatibility for se_cols if it's the side_effects task
             if task_name == 'side_effects':
                 self.se_cols = list(df.columns)
 
@@ -71,13 +71,12 @@ class GraphStructureDataset(Dataset):
         files = os.listdir(graph_dir)
         items = []
         for file in files:
-            cid = int(file.split(".")[0])
-            full_file = graph_dir + file
-            items.append((cid, full_file))
+            if file.endswith('.gpickle'):
+                cid = int(file.split(".")[0])
+                full_file = os.path.join(graph_dir, file)
+                items.append((cid, full_file))
 
         self.items = sorted(items, key=lambda t: t[0])
-
-        self.node_dim = node_dim
 
     def __len__(self):
         return len(self.items)
@@ -87,36 +86,12 @@ class GraphStructureDataset(Dataset):
         with open(full_file, "rb") as f:
             G = pickle.load(f)
 
-        # Standardize attributes to ensure consistency for PyG batching
-        if len(G.nodes) > 0:
-            if self.feature_key:
-                for _, data_dict in G.nodes(data=True):
-                    keys_to_remove = [k for k in data_dict if k != self.feature_key]
-                    for k in keys_to_remove:
-                        del data_dict[k]
-            else:
-                for _, data_dict in G.nodes(data=True):
-                    data_dict.clear()
-
-        # Remove edge attributes as they are unused and can cause batching errors
-        if len(G.edges) > 0:
-            for u, v, d in G.edges(data=True):
-                d.clear()
-
-        data = from_networkx(G)
+        # Convert to HeteroData
+        data = self._networkx_to_hetero(G)
         
-        if self.feature_key and self.feature_key in G.nodes[list(G.nodes)[0]]:
-            # Extract features from NetworkX graph using the specified key
-            # We iterate over nodes to ensure order matches G.nodes() which from_networkx preserves
-            features = [G.nodes[n][self.feature_key] for n in G.nodes()]
-            data.x = torch.tensor(np.array(features), dtype=torch.float32)
-            # Update node_dim based on actual feature size if not manually set (optional, but safer to trust init)
-        else:
-            data.x = torch.ones((data.num_nodes, self.node_dim), dtype=torch.float32)
-            
         data.cid = torch.tensor([cid], dtype=torch.int64)
         
-        # Attach targets for each task
+        # Attach targets for each task with masking
         for task_name, cid_map in self.task_cid_maps.items():
             if cid in cid_map:
                 target = cid_map[cid].unsqueeze(0)
@@ -129,11 +104,9 @@ class GraphStructureDataset(Dataset):
                 setattr(data, f"y_{task_name}", target)
                 setattr(data, f"mask_{task_name}", torch.tensor([True], dtype=torch.bool))
                 
-                # Backward compatibility
                 if task_name == 'side_effects':
                     data.y = target
             else:
-                # Missing label: fill with zeros and mask out
                 dim = self.task_dims[task_name]
                 dummy = torch.zeros((1, dim), dtype=torch.float32)
                 setattr(data, f"y_{task_name}", dummy)
@@ -142,6 +115,59 @@ class GraphStructureDataset(Dataset):
                 if task_name == 'side_effects':
                     data.y = dummy
                     
+        return data
+
+    def _networkx_to_hetero(self, G: nx.Graph) -> HeteroData:
+        """
+        Convert NetworkX graph to PyG HeteroData with heterogeneous edges.
+        Node type: 'atom'
+        Edge types: ('atom', 'SINGLE', 'atom'), ('atom', 'DOUBLE', 'atom'), etc.
+        """
+        data = HeteroData()
+        
+        # Extract node features
+        num_nodes = G.number_of_nodes()
+        node_mapping = {n: i for i, n in enumerate(G.nodes())}
+        
+        if num_nodes == 0:
+            # Empty graph
+            data['atom'].x = torch.zeros((0, 154), dtype=torch.float32)
+            return data
+        
+        # Get node features
+        first_node = list(G.nodes())[0]
+        if self.feature_key in G.nodes[first_node]:
+            features = []
+            for n in G.nodes():
+                feat = G.nodes[n][self.feature_key]
+                features.append(np.array(feat))
+            data['atom'].x = torch.tensor(np.stack(features), dtype=torch.float32)
+        else:
+            # Fallback to ones
+            feat_dim = 154  # Default from graphs_v2
+            data['atom'].x = torch.ones((num_nodes, feat_dim), dtype=torch.float32)
+        
+        # Group edges by bond type
+        edge_dict = {}
+        for u, v, edge_data in G.edges(data=True):
+            bond_type = edge_data.get('bond_type', 'SINGLE')
+            
+            if bond_type not in edge_dict:
+                edge_dict[bond_type] = []
+            
+            u_idx = node_mapping[u]
+            v_idx = node_mapping[v]
+            
+            # Add both directions for undirected graph
+            edge_dict[bond_type].append([u_idx, v_idx])
+            edge_dict[bond_type].append([v_idx, u_idx])
+        
+        # Create edge_index for each bond type
+        for bond_type, edges in edge_dict.items():
+            if len(edges) > 0:
+                edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+                data['atom', bond_type, 'atom'].edge_index = edge_index
+        
         return data
 
 

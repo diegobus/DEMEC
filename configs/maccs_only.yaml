@@ -14,8 +14,5 @@ training:
   seed: 42
 
 data:
-  hetero: true
-  graphs_dir: "data/processed/graphs_v2/"
-  feature_key: "atom_features"
   train_tasks: "maccs"
   eval_tasks: "maccs"

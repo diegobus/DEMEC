@@ -24,10 +24,8 @@ from tqdm import tqdm
 import torch
 from torch_geometric.loader import DataLoader
 
-from demec.data.data_loader import GraphStructureDataset
-from demec.data.hetero_data_loader import HeteroGraphDataset
+from demec.data.data_loader import GraphDataset
 from demec.models.gnn_backbone import GNNBackbone
-from demec.models.hetero_gnn import HeteroGNNBackbone
 
 
 def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', batch_size=32):
@@ -43,11 +41,7 @@ def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', 
         else:
             return getattr(args, key, default)
     
-    # Detect if heterogeneous or homogeneous
-    is_hetero = get_arg(args, 'hetero', False)
-    feature_key = get_arg(args, 'feature_key', None)
-    
-    print(f"Model type: {'Heterogeneous' if is_hetero else 'Homogeneous'}")
+    feature_key = get_arg(args, 'feature_key', 'atom_features')
     
     # Load dataset
     print(f"Loading dataset from: {graphs_dir}")
@@ -58,39 +52,22 @@ def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', 
         'molprops': "data/processed/cid_molprops_matrix.csv"
     }
     
-    if is_hetero:
-        dataset = HeteroGraphDataset(
-            graph_dir=graphs_dir,
-            task_config=task_config,
-            feature_key=feature_key
-        )
-    else:
-        dataset = GraphStructureDataset(
-            graph_dir=graphs_dir,
-            task_config=task_config,
-            feature_key=feature_key
-        )
+    dataset = GraphDataset(
+        graph_dir=graphs_dir,
+        task_config=task_config,
+        feature_key=feature_key
+    )
     
     # Create backbone model
     print("Creating model...")
-    if is_hetero:
-        backbone = HeteroGNNBackbone(
-            input_dim=get_arg(args, 'input_dim', 154),
-            hidden_dim=get_arg(args, 'hidden_dim', 64),
-            num_layers=get_arg(args, 'num_layers', 5),
-            dropout=get_arg(args, 'dropout', 0.2),
-            conv_type=get_arg(args, 'model', 'gcn'),
-            heads=get_arg(args, 'heads', 3)
-        )
-    else:
-        backbone = GNNBackbone(
-            input_dim=get_arg(args, 'input_dim', 1),
-            hidden_dim=get_arg(args, 'hidden_dim', 64),
-            num_layers=get_arg(args, 'num_layers', 5),
-            dropout=get_arg(args, 'dropout', 0.2),
-            conv_type=get_arg(args, 'model', 'gcn'),
-            heads=get_arg(args, 'heads', 3)
-        )
+    backbone = GNNBackbone(
+        input_dim=get_arg(args, 'input_dim', 154),
+        hidden_dim=get_arg(args, 'hidden_dim', 64),
+        num_layers=get_arg(args, 'num_layers', 5),
+        dropout=get_arg(args, 'dropout', 0.2),
+        conv_type=get_arg(args, 'model', 'gcn'),
+        heads=get_arg(args, 'heads', 3)
+    )
     
     # Load weights
     full_model_state = checkpoint['model_state_dict']
