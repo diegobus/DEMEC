@@ -25,7 +25,9 @@ import torch
 from torch_geometric.loader import DataLoader
 
 from demec.data.data_loader import GraphStructureDataset
+from demec.data.hetero_data_loader import HeteroGraphDataset
 from demec.models.gnn_backbone import GNNBackbone
+from demec.models.hetero_gnn import HeteroGNNBackbone
 
 
 def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', batch_size=32):
@@ -41,6 +43,12 @@ def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', 
         else:
             return getattr(args, key, default)
     
+    # Detect if heterogeneous or homogeneous
+    is_hetero = get_arg(args, 'hetero', False)
+    feature_key = get_arg(args, 'feature_key', None)
+    
+    print(f"Model type: {'Heterogeneous' if is_hetero else 'Homogeneous'}")
+    
     # Load dataset
     print(f"Loading dataset from: {graphs_dir}")
     task_config = {
@@ -50,22 +58,39 @@ def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', 
         'molprops': "data/processed/cid_molprops_matrix.csv"
     }
     
-    dataset = GraphStructureDataset(
-        graph_dir=graphs_dir,
-        task_config=task_config,
-        feature_key=get_arg(args, 'feature_key', None)
-    )
+    if is_hetero:
+        dataset = HeteroGraphDataset(
+            graph_dir=graphs_dir,
+            task_config=task_config,
+            feature_key=feature_key
+        )
+    else:
+        dataset = GraphStructureDataset(
+            graph_dir=graphs_dir,
+            task_config=task_config,
+            feature_key=feature_key
+        )
     
     # Create backbone model
     print("Creating model...")
-    backbone = GNNBackbone(
-        input_dim=get_arg(args, 'input_dim', 1),
-        hidden_dim=get_arg(args, 'hidden_dim', 64),
-        num_layers=get_arg(args, 'num_layers', 5),
-        dropout=get_arg(args, 'dropout', 0.2),
-        conv_type=get_arg(args, 'model', 'gcn'),
-        heads=get_arg(args, 'heads', 3)
-    )
+    if is_hetero:
+        backbone = HeteroGNNBackbone(
+            input_dim=get_arg(args, 'input_dim', 154),
+            hidden_dim=get_arg(args, 'hidden_dim', 64),
+            num_layers=get_arg(args, 'num_layers', 5),
+            dropout=get_arg(args, 'dropout', 0.2),
+            conv_type=get_arg(args, 'model', 'gcn'),
+            heads=get_arg(args, 'heads', 3)
+        )
+    else:
+        backbone = GNNBackbone(
+            input_dim=get_arg(args, 'input_dim', 1),
+            hidden_dim=get_arg(args, 'hidden_dim', 64),
+            num_layers=get_arg(args, 'num_layers', 5),
+            dropout=get_arg(args, 'dropout', 0.2),
+            conv_type=get_arg(args, 'model', 'gcn'),
+            heads=get_arg(args, 'heads', 3)
+        )
     
     # Load weights
     full_model_state = checkpoint['model_state_dict']
@@ -91,15 +116,12 @@ def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', 
     embeddings = np.vstack(all_embeddings)
     cids = np.array(all_cids)
     
-    print(f"Extracted {len(embeddings)} embeddings of dimension {embeddings.shape[1]}")
-    
     return embeddings, cids
 
 
 def compute_umap(embeddings, n_neighbors=15, min_dist=0.1, metric='cosine', random_state=42):
     """Compute UMAP projection."""
-    print(f"\nComputing UMAP projection...")
-    print(f"  n_neighbors: {n_neighbors}, min_dist: {min_dist}, metric: {metric}")
+    print(f"Computing UMAP (n_neighbors={n_neighbors}, min_dist={min_dist}, metric={metric})...")
     
     reducer = umap.UMAP(
         n_neighbors=n_neighbors,
@@ -107,44 +129,40 @@ def compute_umap(embeddings, n_neighbors=15, min_dist=0.1, metric='cosine', rand
         n_components=2,
         metric=metric,
         random_state=random_state,
-        verbose=True
+        verbose=False
     )
     
     umap_embeddings = reducer.fit_transform(embeddings)
-    print("UMAP complete!")
     
     return umap_embeddings
 
 
-def load_molecule_info(cids):
+def load_molecule_info(cids, max_side_effects=None):
     """Load detailed information about molecules."""
-    print("\nLoading molecule information...")
+    print("Loading molecule information...")
     
     # Load side effects matrix
     se_df = pd.read_csv('data/processed/cid_se_matrix.csv').set_index('cid')
     
+    # Filter to top N side effects if specified (to match model training)
+    if max_side_effects is not None:
+        col_sums = se_df.sum(axis=0).sort_values(ascending=False)
+        top_cols = col_sums.head(max_side_effects).index.tolist()
+        se_df = se_df[top_cols]
+    
     # Load side effect ID to name mapping
     se_name_dict = {}
     if os.path.exists('data/processed/edges.csv'):
-        print("Loading side effect names...")
         edges_df = pd.read_csv('data/processed/edges.csv')
-        # Create mapping from se_id to se_name
         se_name_dict = dict(zip(edges_df['se_id'], edges_df['se_name']))
-        print(f"Loaded names for {len(se_name_dict)} side effects")
-    else:
-        print("Side effect names file not found")
     
     # Load SMILES and drug names from cache
     smiles_dict = {}
     name_dict = {}
     if os.path.exists('data/processed/smiles_cache.csv'):
-        print("Loading drug names and SMILES from cache...")
         smiles_df = pd.read_csv('data/processed/smiles_cache.csv')
         smiles_dict = dict(zip(smiles_df['cid'], smiles_df['smiles_sanitized']))
         name_dict = dict(zip(smiles_df['cid'], smiles_df['name']))
-        print(f"Loaded data for {len(smiles_dict)} compounds")
-    else:
-        print("SMILES cache not found")
     
     # Build molecule info
     molecule_info = []
@@ -185,83 +203,35 @@ def load_molecule_info(cids):
 
 
 def create_interactive_plot(umap_emb, mol_df, output_path):
-    """Create interactive Plotly visualization."""
-    print("\nCreating interactive plot...")
-    
-    # Create bins for coloring
-    n_se = mol_df['n_side_effects'].values
-    bins = [0, 5, 10, 20, 50, 100, n_se.max()+1]
-    labels = ['0-5', '6-10', '11-20', '21-50', '51-100', '100+']
-    mol_df['se_category'] = pd.cut(n_se, bins=bins, labels=labels)
+    """Create interactive Plotly visualization with slider."""
+    print("Creating interactive plot...")
     
     mol_df['umap_1'] = umap_emb[:, 0]
     mol_df['umap_2'] = umap_emb[:, 1]
     
-    # Create figure with Plotly Express
-    fig = px.scatter(
-        mol_df,
-        x='umap_1',
-        y='umap_2',
-        color='se_category',
-        color_discrete_sequence=px.colors.sequential.Viridis,
-        hover_data={'umap_1': False, 'umap_2': False, 'se_category': False},
-        custom_data=['name', 'cid', 'pubchem_url', 'n_side_effects', 'smiles', 'se_preview'],
-        title='Interactive UMAP: Learned Molecular Embeddings',
-        labels={'umap_1': 'UMAP Dimension 1', 'umap_2': 'UMAP Dimension 2'},
-        category_orders={'se_category': labels}
-    )
+    # Create version with range slider for filtering
+    output_slider = output_path
     
-    # Update hover template with clickable link
-    fig.update_traces(
-        hovertemplate='<b>%{customdata[0]}</b><br>' +
-                      '<b>CID:</b> <a href="%{customdata[2]}" target="_blank">%{customdata[1]}</a><br>' +
-                      '<b>Side Effects:</b> %{customdata[3]}<br>' +
-                      '<b>SMILES:</b> %{customdata[4]:.50}<br>' +
-                      '<b>Top SEs:</b> %{customdata[5]}<br>' +
-                      '<i>Click CID to open PubChem</i>' +
-                      '<extra></extra>',
-        marker=dict(size=8, opacity=0.7, line=dict(width=0.5, color='white'))
-    )
+    import plotly.graph_objects as go
     
-    # Update layout
-    fig.update_layout(
-        width=1400,
-        height=900,
-        template='plotly_white',
-        font=dict(size=12),
-        legend=dict(
-            title=dict(text='# Side Effects', font=dict(size=14)),
-            font=dict(size=12),
-            x=1.02,
-            y=0.5
+    # Create figure with slider
+    fig3 = go.Figure()
+    
+    # Add all points initially
+    fig3.add_trace(go.Scatter(
+        x=mol_df['umap_1'],
+        y=mol_df['umap_2'],
+        mode='markers',
+        marker=dict(
+            size=8,
+            color=mol_df['n_side_effects'],
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title='# Side Effects'),
+            opacity=0.7,
+            line=dict(width=0.5, color='white')
         ),
-        hovermode='closest',
-        title=dict(
-            text='Interactive UMAP: Learned Molecular Embeddings<br><sub>Hover over points for details | Click and drag to zoom | Double-click to reset</sub>',
-            font=dict(size=18)
-        )
-    )
-    
-    # Save as HTML
-    fig.write_html(output_path)
-    print(f"Saved interactive plot: {output_path}")
-    
-    # Also create a continuous version
-    output_continuous = output_path.replace('.html', '_continuous.html')
-    
-    fig2 = px.scatter(
-        mol_df,
-        x='umap_1',
-        y='umap_2',
-        color='n_side_effects',
-        color_continuous_scale='Viridis',
-        hover_data={'umap_1': False, 'umap_2': False, 'n_side_effects': False},
-        custom_data=['name', 'cid', 'pubchem_url', 'n_side_effects', 'smiles', 'se_preview'],
-        title='Interactive UMAP: Continuous Coloring by Side Effect Count',
-        labels={'umap_1': 'UMAP Dimension 1', 'umap_2': 'UMAP Dimension 2', 'n_side_effects': '# Side Effects'}
-    )
-    
-    fig2.update_traces(
+        customdata=mol_df[['name', 'cid', 'pubchem_url', 'n_side_effects', 'smiles', 'se_preview']].values,
         hovertemplate='<b>%{customdata[0]}</b><br>' +
                       '<b>CID:</b> <a href="%{customdata[2]}" target="_blank">%{customdata[1]}</a><br>' +
                       '<b>Side Effects:</b> %{customdata[3]}<br>' +
@@ -269,38 +239,253 @@ def create_interactive_plot(umap_emb, mol_df, output_path):
                       '<b>Top SEs:</b> %{customdata[5]}<br>' +
                       '<i>Click CID to open PubChem</i>' +
                       '<extra></extra>',
-        marker=dict(size=8, opacity=0.7, line=dict(width=0.5, color='white'))
-    )
+        name='All Drugs'
+    ))
     
-    fig2.update_layout(
+    # Create steps for the slider
+    min_se = int(mol_df['n_side_effects'].min())
+    max_se = int(mol_df['n_side_effects'].max())
+    
+    steps = []
+    for se_min in range(min_se, max_se + 1, 1):
+        for se_max in range(se_min, max_se + 1, 1):
+            # Filter data
+            mask = (mol_df['n_side_effects'] >= se_min) & (mol_df['n_side_effects'] <= se_max)
+            
+            step = dict(
+                method="update",
+                args=[{"visible": [True]},
+                      {"title": f"UMAP: Drugs with {se_min}-{se_max} Side Effects ({mask.sum()} drugs)"}],
+                label=f"{se_min}-{se_max}"
+            )
+            steps.append(step)
+    
+    # Add range slider
+    fig3.update_layout(
         width=1400,
-        height=900,
+        height=1000,
         template='plotly_white',
         font=dict(size=12),
         hovermode='closest',
         title=dict(
-            text='Interactive UMAP: Continuous Coloring by Side Effect Count<br><sub>Hover over points for details | Click and drag to zoom | Double-click to reset</sub>',
+            text=f'Interactive UMAP with Range Filter<br><sub>Use sliders below to filter by side effect count | Showing all {len(mol_df)} drugs</sub>',
             font=dict(size=18)
-        )
+        ),
+        xaxis=dict(title='UMAP Dimension 1'),
+        yaxis=dict(title='UMAP Dimension 2'),
+        sliders=[{
+            'active': max_se - min_se,
+            'yanchor': 'top',
+            'y': -0.1,
+            'xanchor': 'left',
+            'currentvalue': {
+                'prefix': 'Side Effect Range: ',
+                'visible': True,
+                'xanchor': 'right'
+            },
+            'pad': {'b': 10, 't': 50},
+            'len': 0.9,
+            'x': 0.1,
+            'steps': steps
+        }]
     )
     
-    fig2.write_html(output_continuous)
-    print(f"Saved continuous plot: {output_continuous}")
+    # Add custom JavaScript for dual range slider
+    fig3_html = fig3.to_html(include_plotlyjs='cdn')
     
-    return fig, fig2
+    # Create custom HTML with dual range slider
+    custom_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }}
+        .controls {{
+            margin: 20px 0;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }}
+        .slider-container {{
+            margin: 15px 0;
+        }}
+        .slider-label {{
+            font-weight: bold;
+            margin-bottom: 5px;
+        }}
+        input[type="range"] {{
+            width: 45%;
+            margin: 0 10px;
+        }}
+        .value-display {{
+            font-size: 18px;
+            color: #333;
+            margin: 10px 0;
+        }}
+        #plot {{
+            margin-top: 20px;
+        }}
+    </style>
+</head>
+<body>
+    <h1>Interactive UMAP: Filter by Side Effect Count</h1>
+    
+    <div class="controls">
+        <div class="slider-container">
+            <div class="slider-label">Minimum Side Effects:</div>
+            <input type="range" id="minSlider" min="{min_se}" max="{max_se}" value="{min_se}" step="1">
+            <span id="minValue">{min_se}</span>
+        </div>
+        
+        <div class="slider-container">
+            <div class="slider-label">Maximum Side Effects:</div>
+            <input type="range" id="maxSlider" min="{min_se}" max="{max_se}" value="{max_se}" step="1">
+            <span id="maxValue">{max_se}</span>
+        </div>
+        
+        <div class="value-display">
+            Showing drugs with <span id="rangeDisplay">{min_se} to {max_se}</span> side effects
+            (<span id="countDisplay">{len(mol_df)}</span> drugs)
+        </div>
+    </div>
+    
+    <div id="plot"></div>
+    
+    <script>
+        // Data
+        const allData = {{
+            x: {mol_df['umap_1'].tolist()},
+            y: {mol_df['umap_2'].tolist()},
+            se_counts: {mol_df['n_side_effects'].tolist()},
+            names: {mol_df['name'].tolist()},
+            cids: {mol_df['cid'].tolist()},
+            urls: {mol_df['pubchem_url'].tolist()},
+            smiles: {mol_df['smiles'].tolist()},
+            se_preview: {mol_df['se_preview'].tolist()}
+        }};
+        
+        const minSlider = document.getElementById('minSlider');
+        const maxSlider = document.getElementById('maxSlider');
+        const minValue = document.getElementById('minValue');
+        const maxValue = document.getElementById('maxValue');
+        const rangeDisplay = document.getElementById('rangeDisplay');
+        const countDisplay = document.getElementById('countDisplay');
+        
+        function updatePlot() {{
+            const minSE = parseInt(minSlider.value);
+            const maxSE = parseInt(maxSlider.value);
+            
+            // Ensure min <= max
+            if (minSE > maxSE) {{
+                if (this.id === 'minSlider') {{
+                    maxSlider.value = minSE;
+                }} else {{
+                    minSlider.value = maxSE;
+                }}
+                return updatePlot();
+            }}
+            
+            // Update displays
+            minValue.textContent = minSE;
+            maxValue.textContent = maxSE;
+            rangeDisplay.textContent = minSE + ' to ' + maxSE;
+            
+            // Filter data
+            const filteredIndices = [];
+            for (let i = 0; i < allData.se_counts.length; i++) {{
+                if (allData.se_counts[i] >= minSE && allData.se_counts[i] <= maxSE) {{
+                    filteredIndices.push(i);
+                }}
+            }}
+            
+            countDisplay.textContent = filteredIndices.length;
+            
+            // Create filtered arrays
+            const filteredX = filteredIndices.map(i => allData.x[i]);
+            const filteredY = filteredIndices.map(i => allData.y[i]);
+            const filteredColors = filteredIndices.map(i => allData.se_counts[i]);
+            const filteredCustomData = filteredIndices.map(i => [
+                allData.names[i],
+                allData.cids[i],
+                allData.urls[i],
+                allData.se_counts[i],
+                allData.smiles[i],
+                allData.se_preview[i]
+            ]);
+            
+            // Create trace
+            const trace = {{
+                x: filteredX,
+                y: filteredY,
+                mode: 'markers',
+                type: 'scatter',
+                marker: {{
+                    size: 8,
+                    color: filteredColors,
+                    colorscale: 'Viridis',
+                    showscale: true,
+                    colorbar: {{title: '# Side Effects'}},
+                    opacity: 0.7,
+                    line: {{width: 0.5, color: 'white'}}
+                }},
+                customdata: filteredCustomData,
+                hovertemplate: '<b>%{{customdata[0]}}</b><br>' +
+                              '<b>CID:</b> <a href="%{{customdata[2]}}" target="_blank">%{{customdata[1]}}</a><br>' +
+                              '<b>Side Effects:</b> %{{customdata[3]}}<br>' +
+                              '<b>SMILES:</b> %{{customdata[4]}}<br>' +
+                              '<b>Top SEs:</b> %{{customdata[5]}}<br>' +
+                              '<i>Click CID to open PubChem</i>' +
+                              '<extra></extra>'
+            }};
+            
+            const layout = {{
+                width: 1400,
+                height: 900,
+                template: 'plotly_white',
+                hovermode: 'closest',
+                xaxis: {{title: 'UMAP Dimension 1'}},
+                yaxis: {{title: 'UMAP Dimension 2'}},
+                title: {{
+                    text: 'Interactive UMAP: Learned Molecular Embeddings<br><sub>Adjust sliders to filter by side effect count</sub>',
+                    font: {{size: 18}}
+                }}
+            }};
+            
+            Plotly.newPlot('plot', [trace], layout);
+        }}
+        
+        minSlider.addEventListener('input', updatePlot);
+        maxSlider.addEventListener('input', updatePlot);
+        
+        // Initial plot
+        updatePlot();
+    </script>
+</body>
+</html>
+"""
+    
+    with open(output_slider, 'w') as f:
+        f.write(custom_html)
+    
+    print(f"Saved: {output_slider}")
+    
+    return output_slider
 
 
 def create_detailed_table(mol_df, output_path):
     """Create a detailed table with all molecule information."""
-    print("\nCreating detailed data table...")
-    
     # Create a CSV with full side effect lists
     export_df = mol_df[['cid', 'name', 'pubchem_url', 'n_side_effects', 'smiles']].copy()
     export_df['side_effects_list'] = mol_df['side_effects'].apply(lambda x: '; '.join(x) if x else 'None')
     
     csv_path = output_path.replace('.html', '_data.csv')
     export_df.to_csv(csv_path, index=False)
-    print(f"Saved detailed data: {csv_path}")
+    print(f"Saved data: {csv_path}")
+    return csv_path
 
 
 def main():
@@ -326,6 +511,14 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
+    # Load checkpoint to get max_side_effects parameter
+    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    checkpoint_args = checkpoint['args']
+    max_side_effects = checkpoint_args.get('max_side_effects', None) if isinstance(checkpoint_args, dict) else getattr(checkpoint_args, 'max_side_effects', None)
+    
+    if max_side_effects:
+        print(f"Model trained on top {max_side_effects} side effects")
+    
     # Extract embeddings
     embeddings, cids = extract_embeddings(
         args.checkpoint,
@@ -341,31 +534,23 @@ def main():
         metric=args.metric
     )
     
-    # Load molecule information
-    mol_df = load_molecule_info(cids)
+    # Load molecule information (filtered to match model training)
+    mol_df = load_molecule_info(cids, max_side_effects=max_side_effects)
     
-    # Create interactive plots
+    # Create interactive plot
     output_path = os.path.join(args.output_dir, 'umap_interactive.html')
-    fig, fig2 = create_interactive_plot(umap_embeddings, mol_df, output_path)
+    html_path = create_interactive_plot(umap_embeddings, mol_df, output_path)
     
     # Create detailed table
-    create_detailed_table(mol_df, output_path)
+    csv_path = create_detailed_table(mol_df, output_path)
     
     # Print summary
     print(f"\n{'='*60}")
-    print("Interactive visualization complete!")
+    print("Visualization Done")
     print(f"{'='*60}")
-    print(f"\n📊 Results:")
-    print(f"  - Interactive plot (categorical): {output_path}")
-    print(f"  - Interactive plot (continuous): {output_path.replace('.html', '_continuous.html')}")
-    print(f"  - Detailed data CSV: {output_path.replace('.html', '_data.csv')}")
-    print(f"\n💡 To view:")
-    print(f"  open {output_path}")
-    print(f"\n✨ Features:")
-    print(f"  - Hover over points to see molecule details")
-    print(f"  - Click and drag to zoom")
-    print(f"  - Double-click to reset view")
-    print(f"  - Click legend items to hide/show categories")
+    print(f"Interactive plot: {html_path}")
+    print(f"Data export: {csv_path}")
+    print(f"\n To view: open {html_path}")
     print(f"{'='*60}\n")
 
 

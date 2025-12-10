@@ -22,26 +22,27 @@ def load_config(config_path):
     return config
 
 
-def create_model(args, dataset, device):
+def setup_model(dataset, args, device):
     """
-    Factory function to create model based on graph type and architecture.
-
-    Args:
-        args: Command line arguments or config namespace
-        dataset: Dataset object
-        device: torch device
-
+    Initialize model with task-specific prediction heads.
+    
     Returns:
         model: Initialized model
         loss_funcs: Dictionary of loss functions per task
         task_weights: Dictionary of task weights
+        train_tasks: List of tasks to train on
+        eval_tasks: List of tasks to evaluate on
     """
     heads_dict = {}
     loss_funcs = {}
     task_weights = {}
 
-    # Parse selected tasks
-    selected_tasks = [t.strip() for t in args.tasks.split(',')]
+    # Parse train and eval tasks
+    train_tasks = [t.strip() for t in args.train_tasks.split(',')]
+    eval_tasks = [t.strip() for t in args.eval_tasks.split(',')]
+    
+    # All tasks that need heads (union of train and eval)
+    all_needed_tasks = set(train_tasks + eval_tasks)
 
     # Parse task weights
     weight_dict = {}
@@ -50,13 +51,15 @@ def create_model(args, dataset, device):
             task, weight = pair.split(':')
             weight_dict[task.strip()] = float(weight)
 
-    # Initialize prediction heads (only for selected tasks)
+    # Initialize prediction heads for all needed tasks
+    print("\nInitializing prediction heads:")
     for task_name, dim in dataset.task_dims.items():
-        if task_name not in selected_tasks:
-            print(f"Skipping task: {task_name} (not in selected tasks)")
+        if task_name not in all_needed_tasks:
             continue
 
-        print(f"Initializing head for task: {task_name} (output_dim={dim})")
+        train_flag = "1" if task_name in train_tasks else "0"
+        eval_flag = "1" if task_name in eval_tasks else "0"
+        print(f"  {task_name} (dim={dim}) | Train: {train_flag} | Eval: {eval_flag}")
 
         # Determine task type (classification vs regression)
         if task_name == "molprops":
@@ -85,13 +88,15 @@ def create_model(args, dataset, device):
         heads_dict[task_name] = head
         loss_funcs[task_name] = head.get_loss_func()
 
-        # Set task weight (default 1.0 if not specified)
-        task_weights[task_name] = weight_dict.get(task_name, 1.0)
-        print(f"  Task weight: {task_weights[task_name]}")
+        # Set task weight (default 1.0 if not specified, 0.0 if not training)
+        if task_name in train_tasks:
+            task_weights[task_name] = weight_dict.get(task_name, 1.0)
+        else:
+            task_weights[task_name] = 0.0  # No contribution to loss
 
     # Create backbone based on graph type
     if args.hetero:
-        print(f"Initializing {args.model.upper()} heterogeneous backbone...")
+        print(f"\nInitializing {args.model.upper()} heterogeneous backbone...")
         backbone = HeteroGNNBackbone(
             input_dim=args.input_dim,
             hidden_dim=args.hidden_dim,
@@ -102,7 +107,7 @@ def create_model(args, dataset, device):
         )
         model = HeteroMultiTaskGNN(backbone, heads_dict)
     else:
-        print(f"Initializing {args.model.upper()} homogeneous backbone...")
+        print(f"\nInitializing {args.model.upper()} homogeneous backbone...")
         backbone = GNNBackbone(
             input_dim=args.input_dim,
             hidden_dim=args.hidden_dim,
@@ -114,16 +119,17 @@ def create_model(args, dataset, device):
         )
         model = MultiTaskGNN(backbone, heads_dict)
 
-    return model.to(device), loss_funcs, task_weights
+    return model.to(device), loss_funcs, task_weights, train_tasks, eval_tasks
 
 
-def train_epoch(model, loader, optimizer, loss_funcs, task_weights, device, clip_grad_norm=None):
+def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, device, clip_grad_norm=None):
     """Single training epoch."""
     model.train()
     total_loss = 0.0
     task_losses = {task: 0.0 for task in loss_funcs.keys()}
-    all_se_logits = []
-    all_se_targets = []
+    
+    # Collect predictions for each eval task
+    eval_predictions = {task: {'logits': [], 'targets': []} for task in eval_tasks}
 
     for batch in loader:
         batch = batch.to(device)
@@ -151,10 +157,10 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, device, clip
                 # Track per-task losses
                 task_losses[task_name] += loss.item() * batch.num_graphs
 
-                # Collect side_effects predictions for metrics
-                if task_name == 'side_effects':
-                    all_se_logits.append(logits.detach())
-                    all_se_targets.append(target.detach())
+                # Collect predictions for eval tasks
+                if task_name in eval_tasks:
+                    eval_predictions[task_name]['logits'].append(logits.detach())
+                    eval_predictions[task_name]['targets'].append(target.detach())
 
         optimizer.zero_grad()
         batch_loss.backward()
@@ -167,24 +173,37 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, device, clip
 
         total_loss += batch_loss.item() * batch.num_graphs
 
-    # Compute metrics on all accumulated predictions
-    if all_se_logits:
-        all_se_logits = torch.cat(all_se_logits, dim=0)
-        all_se_targets = torch.cat(all_se_targets, dim=0)
-        metrics = comprehensive_metrics(all_se_logits, all_se_targets, k_values=[50, 100])
-    else:
-        metrics = {}
+    # Compute metrics for each eval task
+    all_metrics = {}
+    for task_name in eval_tasks:
+        if eval_predictions[task_name]['logits']:
+            logits = torch.cat(eval_predictions[task_name]['logits'], dim=0)
+            targets = torch.cat(eval_predictions[task_name]['targets'], dim=0)
+            
+            # Determine task type for appropriate metrics
+            if task_name == 'molprops':
+                task_type = 'regression'
+            elif task_name == 'maccs':
+                task_type = 'fingerprint'
+            else:
+                task_type = 'classification'
+            
+            metrics = comprehensive_metrics(logits, targets, task_type=task_type)
+            all_metrics[task_name] = metrics
+        else:
+            all_metrics[task_name] = {}
 
-    return total_loss, task_losses, metrics
+    return total_loss, task_losses, all_metrics
 
 
-def validate(model, loader, loss_funcs, task_weights, device):
+def validate(model, loader, loss_funcs, task_weights, eval_tasks, device):
     """Validation loop."""
     model.eval()
     total_loss = 0.0
     task_losses = {task: 0.0 for task in loss_funcs.keys()}
-    all_se_logits = []
-    all_se_targets = []
+    
+    # Collect predictions for each eval task
+    eval_predictions = {task: {'logits': [], 'targets': []} for task in eval_tasks}
 
     with torch.no_grad():
         for batch in loader:
@@ -213,22 +232,34 @@ def validate(model, loader, loss_funcs, task_weights, device):
                     # Track per-task losses
                     task_losses[task_name] += loss.item() * batch.num_graphs
 
-                    # Collect side_effects predictions for metrics
-                    if task_name == 'side_effects':
-                        all_se_logits.append(logits.detach())
-                        all_se_targets.append(target.detach())
+                    # Collect predictions for eval tasks
+                    if task_name in eval_tasks:
+                        eval_predictions[task_name]['logits'].append(logits.detach())
+                        eval_predictions[task_name]['targets'].append(target.detach())
 
             total_loss += batch_loss.item() * batch.num_graphs
 
-    # Compute metrics on all accumulated predictions
-    if all_se_logits:
-        all_se_logits = torch.cat(all_se_logits, dim=0)
-        all_se_targets = torch.cat(all_se_targets, dim=0)
-        metrics = comprehensive_metrics(all_se_logits, all_se_targets, k_values=[50, 100])
-    else:
-        metrics = {}
+    # Compute metrics for each eval task
+    all_metrics = {}
+    for task_name in eval_tasks:
+        if eval_predictions[task_name]['logits']:
+            logits = torch.cat(eval_predictions[task_name]['logits'], dim=0)
+            targets = torch.cat(eval_predictions[task_name]['targets'], dim=0)
+            
+            # Determine task type for appropriate metrics
+            if task_name == 'molprops':
+                task_type = 'regression'
+            elif task_name == 'maccs':
+                task_type = 'fingerprint'
+            else:
+                task_type = 'classification'
+            
+            metrics = comprehensive_metrics(logits, targets, task_type=task_type)
+            all_metrics[task_name] = metrics
+        else:
+            all_metrics[task_name] = {}
 
-    return total_loss, task_losses, metrics
+    return total_loss, task_losses, all_metrics
 
 
 def train_model(config, device_str=None):
@@ -273,7 +304,10 @@ def train_model(config, device_str=None):
     cfg.task_weights = None
     cfg.log_dir = train_cfg.get('log_dir', 'runs')
     cfg.checkpoint_dir = train_cfg.get('checkpoint_dir', 'checkpoints')
-    cfg.tasks = data_cfg.get('tasks_enabled', 'side_effects,atc,maccs')
+    
+    # Separate train and eval tasks
+    cfg.train_tasks = data_cfg.get('train_tasks', data_cfg.get('tasks_enabled', 'side_effects,atc,maccs'))
+    cfg.eval_tasks = data_cfg.get('eval_tasks', cfg.train_tasks)  # Default to same as train_tasks
 
     # Auto-detect graph directory and input dimension based on graph type
     if cfg.hetero:
@@ -414,16 +448,21 @@ def main():
     cfg.focal_alpha = args.focal_alpha
     cfg.clip_grad_norm = args.clip_grad_norm
     cfg.save_model = args.save_model
-    cfg.exp_name = args.exp_name
+    # Use experiment_name from config if available, otherwise use CLI arg
+    cfg.exp_name = args.exp_name if args.exp_name else config.get('experiment_name', None)
     cfg.task_weights = args.task_weights
     cfg.log_dir = args.log_dir if args.log_dir else train_cfg.get('log_dir', 'runs')
     cfg.checkpoint_dir = args.checkpoint_dir if args.checkpoint_dir else train_cfg.get('checkpoint_dir', 'checkpoints')
 
     # Task configuration from config or CLI
     if args.tasks:
-        cfg.tasks = args.tasks
+        # If --tasks is provided, use it for both train and eval
+        cfg.train_tasks = args.tasks
+        cfg.eval_tasks = args.tasks
     else:
-        cfg.tasks = data_cfg.get('tasks_enabled', 'side_effects,atc,maccs')
+        # Use config file or defaults
+        cfg.train_tasks = data_cfg.get('train_tasks', data_cfg.get('tasks_enabled', 'side_effects,atc,maccs'))
+        cfg.eval_tasks = data_cfg.get('eval_tasks', cfg.train_tasks)
 
     # Auto-detect graph directory and input dimension based on graph type
     if cfg.hetero:
@@ -482,7 +521,7 @@ def main():
     test_loader = DataLoader(test_ds, batch_size=cfg.batch_size)
 
     # Create model
-    model, loss_funcs, task_weights = create_model(cfg, dataset, device)
+    model, loss_funcs, task_weights, train_tasks, eval_tasks = setup_model(dataset, cfg, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
 
     # Setup experiment logger
@@ -490,7 +529,8 @@ def main():
     logger.log_hyperparameters(task_weights)
 
     print(f"\nStarting training loop for {cfg.epochs} epochs...")
-    print(f"Active tasks: {', '.join(loss_funcs.keys())}")
+    print(f"Train tasks: {', '.join(train_tasks)}")
+    print(f"Eval tasks: {', '.join(eval_tasks)}")
     print(f"Task weights: {task_weights}")
     if cfg.clip_grad_norm:
         print(f"Gradient clipping: max_norm={cfg.clip_grad_norm}")
@@ -499,10 +539,10 @@ def main():
 
     for epoch in range(cfg.epochs):
         train_loss, train_task_losses, train_metrics = train_epoch(
-            model, train_loader, optimizer, loss_funcs, task_weights, device, cfg.clip_grad_norm
+            model, train_loader, optimizer, loss_funcs, task_weights, eval_tasks, device, cfg.clip_grad_norm
         )
         val_loss, val_task_losses, val_metrics = validate(
-            model, val_loader, loss_funcs, task_weights, device
+            model, val_loader, loss_funcs, task_weights, eval_tasks, device
         )
 
         # Log metrics to TensorBoard
@@ -511,9 +551,10 @@ def main():
             train_metrics, val_metrics, len(train_ds), len(val_ds), optimizer
         )
 
-        # Print to console
-        train_str = format_metrics_string(train_metrics)
-        val_str = format_metrics_string(val_metrics)
+        # Print to console - use first eval task's metrics
+        primary_eval_task = eval_tasks[0]
+        train_str = format_metrics_string(train_metrics.get(primary_eval_task, {}))
+        val_str = format_metrics_string(val_metrics.get(primary_eval_task, {}))
 
         print(
             f"Epoch {epoch+1:3d} | "
@@ -526,10 +567,28 @@ def main():
             task_loss_str = format_task_losses(train_task_losses, len(train_ds))
             print(f"  Task losses: {task_loss_str}")
 
-        # Save checkpoint if best
-        current_val_map = val_metrics.get('mAP', 0)
-        if logger.save_checkpoint(epoch, model, optimizer, current_val_map):
-            print(f"    Saved best model (mAP: {current_val_map:.4f})")
+        # Save checkpoint if best (use primary eval task's primary metric)
+        task_metrics = val_metrics.get(primary_eval_task, {})
+        
+        # Determine primary metric based on task type
+        if 'MSE' in task_metrics:
+            # Regression: lower MSE is better, so negate for comparison
+            current_val_metric = -task_metrics.get('MSE', float('inf'))
+            metric_name = 'MSE'
+            metric_value = task_metrics.get('MSE', 0)
+        elif 'Hamming' in task_metrics:
+            # Fingerprint: lower Hamming is better, use Tanimoto (higher is better)
+            current_val_metric = task_metrics.get('Tanimoto', 0)
+            metric_name = 'Tanimoto'
+            metric_value = task_metrics.get('Tanimoto', 0)
+        else:
+            # Classification: higher mAP is better
+            current_val_metric = task_metrics.get('mAP', 0)
+            metric_name = 'mAP'
+            metric_value = task_metrics.get('mAP', 0)
+        
+        if logger.save_checkpoint(epoch, model, optimizer, current_val_metric):
+            print(f"    Saved best model ({metric_name}: {metric_value:.4f})")
 
     # Finalize logging
     logger.finalize(val_metrics)

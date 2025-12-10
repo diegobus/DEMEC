@@ -1,0 +1,21 @@
+experiment_name: "molprops_only_baseline"
+
+model:
+  architecture: "gcn"
+  hidden_dim: 64
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+
+training:
+  epochs: 50
+  batch_size: 32
+  lr: 0.001
+  seed: 42
+
+data:
+  hetero: true
+  graphs_dir: "data/processed/graphs_v2/"
+  feature_key: "atom_features"
+  train_tasks: "molprops"
+  eval_tasks: "molprops"

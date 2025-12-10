@@ -26,13 +26,16 @@ class ExperimentLogger:
         self.checkpoint_dir = checkpoint_dir
         
         # Generate experiment name if not provided
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if args.exp_name is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             graph_type = "hetero" if args.hetero else "homo"
-            tasks_str = "_".join(args.tasks.split(',')[:2])  # First 2 tasks
+            # Use train_tasks for experiment name
+            train_tasks = getattr(args, 'train_tasks', getattr(args, 'tasks', 'unknown'))
+            tasks_str = "_".join(train_tasks.split(',')[:2])  # First 2 tasks
             self.exp_name = f"{graph_type}_{args.model}_{tasks_str}_{timestamp}"
         else:
-            self.exp_name = args.exp_name
+            # Use provided experiment name with timestamp
+            self.exp_name = f"{args.exp_name}_{timestamp}"
         
         # Setup TensorBoard writer
         self.log_path = os.path.join(log_dir, self.exp_name)
@@ -60,7 +63,8 @@ class ExperimentLogger:
             'dropout': self.args.dropout,
             'lr': self.args.lr,
             'batch_size': self.args.batch_size,
-            'tasks': self.args.tasks,
+            'train_tasks': getattr(self.args, 'train_tasks', getattr(self.args, 'tasks', 'unknown')),
+            'eval_tasks': getattr(self.args, 'eval_tasks', getattr(self.args, 'tasks', 'unknown')),
             'focal_alpha': self.args.focal_alpha if self.args.focal_alpha else 0.25,
             'clip_grad_norm': self.args.clip_grad_norm if self.args.clip_grad_norm else 0.0,
         }
@@ -190,6 +194,7 @@ class ExperimentLogger:
 def format_metrics_string(metrics):
     """
     Format metrics dictionary into a compact string for console output.
+    Handles different metric types (classification, fingerprint, regression).
     
     Args:
         metrics: Dictionary of metric names to values
@@ -200,10 +205,26 @@ def format_metrics_string(metrics):
     if not metrics:
         return "N/A"
     
-    return (f"mAP:{metrics.get('mAP', 0):.3f} "
-            f"P@50:{metrics.get('P@50', 0):.3f} "
-            f"P@100:{metrics.get('P@100', 0):.3f} "
-            f"AUROC:{metrics.get('AUROC', 0):.3f}")
+    # Regression metrics (molprops)
+    if 'MSE' in metrics:
+        return (f"MSE:{metrics.get('MSE', 0):.4f} "
+                f"MAE:{metrics.get('MAE', 0):.4f} "
+                f"R²:{metrics.get('R2', 0):.3f}")
+    
+    # Fingerprint metrics (MACCS)
+    elif 'Hamming' in metrics:
+        return (f"Hamming:{metrics.get('Hamming', 0):.3f} "
+                f"Tanimoto:{metrics.get('Tanimoto', 0):.3f} "
+                f"Bit_Acc:{metrics.get('Bit_Acc', 0):.3f} "
+                f"AUROC:{metrics.get('AUROC', 0):.3f}")
+    
+    # Classification metrics (side_effects, ATC)
+    else:
+        return (f"mAP:{metrics.get('mAP', 0):.3f} "
+                f"P@1:{metrics.get('P@1', 0):.3f} "
+                f"P@5:{metrics.get('P@5', 0):.3f} "
+                f"Top1:{metrics.get('Top1_Acc', 0):.3f} "
+                f"AUROC:{metrics.get('AUROC', 0):.3f}")
 
 
 def format_task_losses(task_losses, dataset_size):

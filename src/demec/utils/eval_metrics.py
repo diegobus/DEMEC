@@ -145,31 +145,159 @@ def compute_auroc(logits, y_true, average='micro'):
         return sum(aurocs) / len(aurocs) if aurocs else 0.0
 
 
-def comprehensive_metrics(logits, y_true, k_values=[10, 50, 100]):
+def hamming_distance(logits, y_true, threshold=0.5):
     """
-    Compute comprehensive evaluation metrics for multi-label classification.
+    Hamming distance: Number of bit positions that differ.
+    Lower is better (0 = perfect match).
     
     Args:
-        logits: Model predictions (batch_size, num_classes)
-        y_true: True labels (batch_size, num_classes)
-        k_values: List of K values for Precision/Recall/F1@K
+        logits: Model predictions (batch_size, num_bits)
+        y_true: True labels (batch_size, num_bits)
+        threshold: Threshold for converting logits to binary
+        
+    Returns:
+        Average Hamming distance (normalized by num_bits)
+    """
+    preds = (torch.sigmoid(logits) > threshold).float()
+    y_true = y_true.float()
+    
+    # Count differing bits per sample
+    diff = (preds != y_true).float().sum(dim=1)
+    num_bits = y_true.shape[1]
+    
+    # Normalize by number of bits
+    return (diff / num_bits).mean().item()
+
+
+def tanimoto_similarity(logits, y_true, threshold=0.5):
+    """
+    Tanimoto similarity (Jaccard index) for binary fingerprints.
+    Higher is better (1.0 = perfect match).
+    
+    Args:
+        logits: Model predictions (batch_size, num_bits)
+        y_true: True labels (batch_size, num_bits)
+        threshold: Threshold for converting logits to binary
+        
+    Returns:
+        Average Tanimoto similarity
+    """
+    preds = (torch.sigmoid(logits) > threshold).float()
+    y_true = y_true.float()
+    
+    # Tanimoto = intersection / union
+    intersection = (preds * y_true).sum(dim=1)
+    union = (preds + y_true).clamp(max=1).sum(dim=1)
+    
+    # Avoid division by zero
+    tanimoto = torch.where(union > 0, intersection / union, torch.zeros_like(union))
+    
+    return tanimoto.mean().item()
+
+
+def bit_accuracy(logits, y_true, threshold=0.5):
+    """
+    Percentage of bits predicted correctly.
+    
+    Args:
+        logits: Model predictions (batch_size, num_bits)
+        y_true: True labels (batch_size, num_bits)
+        threshold: Threshold for converting logits to binary
+        
+    Returns:
+        Bit-wise accuracy (0 to 1)
+    """
+    preds = (torch.sigmoid(logits) > threshold).float()
+    y_true = y_true.float()
+    
+    correct = (preds == y_true).float()
+    return correct.mean().item()
+
+
+def regression_metrics(preds, y_true):
+    """
+    Compute regression metrics (MSE, MAE, R²).
+    
+    Args:
+        preds: Model predictions (batch_size, num_properties)
+        y_true: True values (batch_size, num_properties)
+        
+    Returns:
+        Dictionary of metrics
+    """
+    preds_np = preds.detach().cpu().numpy()
+    y_true_np = y_true.detach().cpu().numpy()
+    
+    # MSE
+    mse = ((preds_np - y_true_np) ** 2).mean()
+    
+    # MAE
+    mae = np.abs(preds_np - y_true_np).mean()
+    
+    # R² (coefficient of determination)
+    ss_res = ((y_true_np - preds_np) ** 2).sum()
+    ss_tot = ((y_true_np - y_true_np.mean(axis=0)) ** 2).sum()
+    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+    
+    # Per-property MAE
+    per_property_mae = np.abs(preds_np - y_true_np).mean(axis=0)
+    
+    return {
+        'MSE': float(mse),
+        'MAE': float(mae),
+        'R2': float(r2),
+        'per_property_MAE': per_property_mae.tolist()
+    }
+
+
+def comprehensive_metrics(logits, y_true, k_values=[10, 50, 100], task_type='classification'):
+    """
+    Compute comprehensive evaluation metrics based on task type.
+    
+    Args:
+        logits: Model predictions (batch_size, num_outputs)
+        y_true: True labels (batch_size, num_outputs)
+        k_values: List of K values for Precision/Recall/F1@K (classification only)
+        task_type: 'classification', 'fingerprint', or 'regression'
         
     Returns:
         Dictionary of metrics
     """
     metrics = {}
     
-    # Mean Average Precision (primary metric)
-    metrics['mAP'] = mean_average_precision(logits, y_true)
+    if task_type == 'regression':
+        # Regression metrics (molprops)
+        return regression_metrics(logits, y_true)
     
-    # Precision/Recall/F1 at various K values
-    for k in k_values:
-        metrics[f'P@{k}'] = precision_at_k(logits, y_true, k)
-        metrics[f'R@{k}'] = recall_at_k(logits, y_true, k)
-        metrics[f'F1@{k}'] = f1_at_k(logits, y_true, k)
-    
-    # Overall classification quality
-    metrics['AUROC'] = compute_auroc(logits, y_true, average='micro')
+    elif task_type == 'fingerprint':
+        # Binary fingerprint metrics (MACCS)
+        metrics['Hamming'] = hamming_distance(logits, y_true)
+        metrics['Tanimoto'] = tanimoto_similarity(logits, y_true)
+        metrics['Bit_Acc'] = bit_accuracy(logits, y_true)
+        metrics['AUROC'] = compute_auroc(logits, y_true, average='micro')
+        
+        # Also include mAP for comparison
+        metrics['mAP'] = mean_average_precision(logits, y_true)
+        
+    else:
+        # Multi-label classification metrics (side_effects, ATC)
+        # Mean Average Precision (primary metric)
+        metrics['mAP'] = mean_average_precision(logits, y_true)
+        
+        # Precision at small K values (more relevant for sparse labels)
+        for k in [1, 5, 10]:
+            metrics[f'P@{k}'] = precision_at_k(logits, y_true, k)
+        
+        # Overall classification quality
+        metrics['AUROC'] = compute_auroc(logits, y_true, average='micro')
+        
+        # Top-1 accuracy (for very sparse labels like ATC)
+        _, top1_idx = torch.topk(logits, 1, dim=1)
+        top1_correct = 0
+        for i in range(len(y_true)):
+            if y_true[i, top1_idx[i, 0]] > 0:
+                top1_correct += 1
+        metrics['Top1_Acc'] = top1_correct / len(y_true)
     
     return metrics
 
