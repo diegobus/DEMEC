@@ -231,6 +231,120 @@ def validate(model, loader, loss_funcs, task_weights, device):
     return total_loss, task_losses, metrics
 
 
+def train_model(config, device_str=None):
+    """
+    Wrapper function for hyperparameter optimization with Optuna.
+    Executes training with the provided config and returns the best validation mAP.
+
+    Args:
+        config: Dictionary with model, training, and data configuration
+        device_str: Optional device string ("cpu" or "cuda")
+
+    Returns:
+        Negative of best validation mAP (Optuna minimizes by default)
+    """
+    # This function is called by Optuna's tune script, so we follow the same pattern
+    # as main() but return a metric instead of running interactively
+
+    from types import SimpleNamespace
+    cfg = SimpleNamespace()
+
+    # Extract config sections
+    model_cfg = config.get('model', {})
+    train_cfg = config.get('training', {})
+    data_cfg = config.get('data', {})
+
+    # Set all configuration values
+    cfg.model = model_cfg.get('architecture', 'gcn')
+    cfg.epochs = train_cfg.get('epochs', 10)
+    cfg.batch_size = train_cfg.get('batch_size', 32)
+    cfg.lr = train_cfg.get('lr', 1e-3)
+    cfg.seed = train_cfg.get('seed', 42)
+    cfg.hidden_dim = model_cfg.get('hidden_dim', 64)
+    cfg.num_layers = model_cfg.get('num_layers', 5)
+    cfg.dropout = model_cfg.get('dropout', 0.2)
+    cfg.heads = model_cfg.get('heads', 3)
+    cfg.hetero = data_cfg.get('hetero', False)
+    cfg.focal_alpha = None
+    cfg.clip_grad_norm = None
+    cfg.save_model = False
+    cfg.exp_name = None
+    cfg.task_weights = None
+    cfg.log_dir = train_cfg.get('log_dir', 'runs')
+    cfg.checkpoint_dir = train_cfg.get('checkpoint_dir', 'checkpoints')
+    cfg.tasks = data_cfg.get('tasks_enabled', 'side_effects,atc,maccs')
+
+    # Auto-detect graph directory and input dimension based on graph type
+    if cfg.hetero:
+        cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
+        cfg.input_dim = model_cfg.get('input_dim', 154)
+        cfg.feature_key = data_cfg.get('feature_key', 'x')
+    else:
+        cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs/')
+        cfg.input_dim = model_cfg.get('node_dim', model_cfg.get('input_dim', 1))
+        cfg.feature_key = data_cfg.get('feature_key', None)
+
+    # Set seed
+    torch.manual_seed(cfg.seed)
+
+    # Set device
+    if device_str:
+        device = torch.device(device_str)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Task configuration
+    task_config = {
+        'side_effects': "data/processed/cid_se_matrix.csv",
+        'atc': "data/processed/cid_atc_l3_matrix.csv",
+        'maccs': "data/processed/cid_maccs_matrix.csv",
+        'molprops': "data/processed/cid_molprops_matrix.csv"
+    }
+
+    # Load dataset based on graph type
+    if cfg.hetero:
+        dataset = HeteroGraphDataset(
+            cfg.graphs_dir,
+            task_config=task_config,
+            feature_key=cfg.feature_key
+        )
+        train_ds, val_ds, test_ds = make_splits_hetero(dataset, train=0.8, val=0.1, seed=cfg.seed)
+    else:
+        dataset = GraphStructureDataset(
+            cfg.graphs_dir,
+            task_config=task_config,
+            node_dim=cfg.input_dim,
+            feature_key=cfg.feature_key
+        )
+        train_ds, val_ds, test_ds = make_splits_homo(dataset, train=0.8, val=0.1, seed=cfg.seed)
+
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size)
+
+    # Create model
+    model, loss_funcs, task_weights = create_model(cfg, dataset, device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+
+    # Training loop - track best validation mAP
+    best_val_map = 0.0
+
+    for epoch in range(cfg.epochs):
+        train_loss, train_task_losses, train_metrics = train_epoch(
+            model, train_loader, optimizer, loss_funcs, task_weights, device, cfg.clip_grad_norm
+        )
+        val_loss, val_task_losses, val_metrics = validate(
+            model, val_loader, loss_funcs, task_weights, device
+        )
+
+        # Track best validation mAP
+        current_val_map = val_metrics.get('mAP', 0)
+        if current_val_map > best_val_map:
+            best_val_map = current_val_map
+
+    # Return negative mAP since Optuna minimizes by default
+    return -best_val_map
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified Training Framework for GNN Models")
 

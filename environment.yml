@@ -13,6 +13,7 @@ dependencies:
   - rdkit
   - scikit-learn
   - pyyaml
+  - optuna
   - pytorch
   - pip:
       - torch-geometric
