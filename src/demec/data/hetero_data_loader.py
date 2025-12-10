@@ -14,31 +14,40 @@ class HeteroGraphDataset(Dataset):
     Converts NetworkX graphs to PyG HeteroData with bond types as edge types.
     """
 
-    def __init__(self, graph_dir, cid_se_csv=None, task_config=None, feature_key='x'):
+    def __init__(self, graph_dir, cid_se_csv=None, task_config=None, feature_key='x', max_side_effects=None):
         super().__init__()
         self.graph_dir = graph_dir
         self.feature_key = feature_key
-        
+
         # Task configuration
         self.task_configs = {}
         if cid_se_csv:
             self.task_configs['side_effects'] = cid_se_csv
         if task_config:
             self.task_configs.update(task_config)
-            
+
         self.task_cid_maps = {}
         self.task_dims = {}
-        
+
         for task_name, csv_path in self.task_configs.items():
             df = pd.read_csv(csv_path).set_index("cid")
+
+            # For side_effects, optionally filter to top N most common
+            if task_name == 'side_effects' and max_side_effects is not None:
+                # Select top N side effects by prevalence (sum of occurrences)
+                col_sums = df.sum(axis=0).sort_values(ascending=False)
+                top_cols = col_sums.head(max_side_effects).index.tolist()
+                df = df[top_cols]
+                print(f"Limited side_effects to top {max_side_effects} (from {len(col_sums)} total)")
+
             self.task_dims[task_name] = len(df.columns)
-            
+
             cid_map = {
                 int(cid): torch.tensor(row.values, dtype=torch.float32)
                 for cid, row in df.iterrows()
             }
             self.task_cid_maps[task_name] = cid_map
-            
+
             if task_name == 'side_effects':
                 self.se_cols = list(df.columns)
 

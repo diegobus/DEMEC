@@ -37,3 +37,8 @@ Thumbs.db
 data/**/*.tsv
 data/**/*.tsv.gz
 data/**/*.zip
+
+# --- Runtime artifacts ---
+runs/
+db/
+db.sqlite3

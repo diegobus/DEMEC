@@ -21,3 +21,4 @@ data:
   graphs_dir: "data/processed/graphs_v2/"
   feature_key: "x"     # Key for node features in hetero graphs
   tasks_enabled: "side_effects,atc,maccs,molprops"  # Comma-separated list of tasks
+  max_side_effects: 200  # Limit to top N most common side effects (null = use all)

@@ -18,6 +18,7 @@ data:
   hetero: false        # Use homogeneous graphs
   graphs_dir: "data/processed/graphs/"
   feature_key: null    # e.g., "emb" or null
+  max_side_effects: 200  # Limit to top N most common side effects (null = use all)
   tasks:
     side_effects: "data/processed/cid_se_matrix.csv"
     atc: "data/processed/cid_atc_l3_matrix.csv"

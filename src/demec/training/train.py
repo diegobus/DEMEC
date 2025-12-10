@@ -265,6 +265,7 @@ def train_model(config, device_str=None):
     cfg.dropout = model_cfg.get('dropout', 0.2)
     cfg.heads = model_cfg.get('heads', 3)
     cfg.hetero = data_cfg.get('hetero', False)
+    cfg.max_side_effects = data_cfg.get('max_side_effects', None)
     cfg.focal_alpha = None
     cfg.clip_grad_norm = None
     cfg.save_model = False
@@ -306,7 +307,8 @@ def train_model(config, device_str=None):
         dataset = HeteroGraphDataset(
             cfg.graphs_dir,
             task_config=task_config,
-            feature_key=cfg.feature_key
+            feature_key=cfg.feature_key,
+            max_side_effects=cfg.max_side_effects
         )
         train_ds, val_ds, test_ds = make_splits_hetero(dataset, train=0.8, val=0.1, seed=cfg.seed)
     else:
@@ -314,7 +316,8 @@ def train_model(config, device_str=None):
             cfg.graphs_dir,
             task_config=task_config,
             node_dim=cfg.input_dim,
-            feature_key=cfg.feature_key
+            feature_key=cfg.feature_key,
+            max_side_effects=cfg.max_side_effects
         )
         train_ds, val_ds, test_ds = make_splits_homo(dataset, train=0.8, val=0.1, seed=cfg.seed)
 
@@ -407,6 +410,7 @@ def main():
     cfg.dropout = args.dropout if args.dropout else model_cfg.get('dropout', 0.2)
     cfg.heads = args.heads if args.heads else model_cfg.get('heads', 3)
     cfg.hetero = data_cfg.get('hetero', False)  # Read from config, not CLI
+    cfg.max_side_effects = data_cfg.get('max_side_effects', None)
     cfg.focal_alpha = args.focal_alpha
     cfg.clip_grad_norm = args.clip_grad_norm
     cfg.save_model = args.save_model
@@ -459,7 +463,8 @@ def main():
         dataset = HeteroGraphDataset(
             cfg.graphs_dir,
             task_config=task_config,
-            feature_key=cfg.feature_key
+            feature_key=cfg.feature_key,
+            max_side_effects=cfg.max_side_effects
         )
         train_ds, val_ds, test_ds = make_splits_hetero(dataset, train=0.8, val=0.1, seed=cfg.seed)
     else:
@@ -467,7 +472,8 @@ def main():
             cfg.graphs_dir,
             task_config=task_config,
             node_dim=cfg.input_dim,
-            feature_key=cfg.feature_key
+            feature_key=cfg.feature_key,
+            max_side_effects=cfg.max_side_effects
         )
         train_ds, val_ds, test_ds = make_splits_homo(dataset, train=0.8, val=0.1, seed=cfg.seed)
 
