@@ -1,0 +1,23 @@
+experiment_name: "hetero_gat_experiment"
+
+model:
+  architecture: "gat"  # Options: "gcn", "gat"
+  hidden_dim: 64
+  num_layers: 5
+  dropout: 0.2
+  heads: 3             # Number of attention heads for GAT
+  input_dim: 154       # Input feature dimension for hetero graphs (one-hot atom features)
+
+training:
+  epochs: 100
+  batch_size: 32
+  lr: 0.001
+  seed: 42
+  log_dir: "runs"
+  checkpoint_dir: "checkpoints"
+
+data:
+  hetero: true         # Use heterogeneous graphs with bond-type-specific edges
+  graphs_dir: "data/processed/graphs_v2/"
+  feature_key: "x"     # Key for node features in hetero graphs
+  tasks_enabled: "side_effects,atc,maccs,molprops"  # Comma-separated list of tasks
