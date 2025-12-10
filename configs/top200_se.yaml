@@ -1,0 +1,23 @@
+experiment_name: "top200_se_baseline"
+
+model:
+  architecture: "gcn"
+  hidden_dim: 64
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  node_dim: 1
+
+training:
+  epochs: 50
+  batch_size: 32
+  lr: 0.001
+  seed: 42
+
+data:
+  hetero: false
+  graphs_dir: "data/processed/graphs_v2/"
+  feature_key: null
+  max_side_effects: 200  # Limit to top 200 most common side effects
+  tasks:
+    side_effects: "data/processed/cid_se_matrix.csv"

@@ -141,12 +141,15 @@ class ExperimentLogger:
                 os.makedirs(self.checkpoint_dir, exist_ok=True)
                 checkpoint_path = os.path.join(self.checkpoint_dir, f"{self.exp_name}_best.pt")
                 
+                # Convert args to dict to avoid pickle issues with custom classes
+                args_dict = vars(self.args) if hasattr(self.args, '__dict__') else self.args
+                
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_mAP': self.best_val_map,
-                    'args': self.args,
+                    'args': args_dict,
                 }, checkpoint_path)
                 
                 self.checkpoint_path = checkpoint_path

@@ -28,6 +28,7 @@ class HeteroGraphDataset(Dataset):
 
         self.task_cid_maps = {}
         self.task_dims = {}
+        self.has_other_ses_map = {}  # Track drugs with non-top-N side effects
 
         for task_name, csv_path in self.task_configs.items():
             df = pd.read_csv(csv_path).set_index("cid")
@@ -37,10 +38,25 @@ class HeteroGraphDataset(Dataset):
                 # Select top N side effects by prevalence (sum of occurrences)
                 col_sums = df.sum(axis=0).sort_values(ascending=False)
                 top_cols = col_sums.head(max_side_effects).index.tolist()
+                
+                # Before filtering, identify drugs with side effects NOT in top N
+                for cid, row in df.iterrows():
+                    total_ses = row.sum()  # Total number of side effects
+                    top_n_ses = row[top_cols].sum()  # Number of top-N side effects
+                    has_other = (total_ses > top_n_ses)  # Has SEs not in top N
+                    self.has_other_ses_map[int(cid)] = float(has_other)
+                
+                # Now filter to top N
                 df = df[top_cols]
                 print(f"Limited side_effects to top {max_side_effects} (from {len(col_sums)} total)")
+                print(f"  {sum(self.has_other_ses_map.values())} drugs have side effects not in top {max_side_effects}")
 
-            self.task_dims[task_name] = len(df.columns)
+            # Store dimensions for model initialization
+            # Add +1 for "has_other_SEs" flag if we filtered side effects
+            if task_name == 'side_effects' and max_side_effects is not None:
+                self.task_dims[task_name] = len(df.columns) + 1  # +1 for has_other_SEs
+            else:
+                self.task_dims[task_name] = len(df.columns)
 
             cid_map = {
                 int(cid): torch.tensor(row.values, dtype=torch.float32)
@@ -79,6 +95,12 @@ class HeteroGraphDataset(Dataset):
         for task_name, cid_map in self.task_cid_maps.items():
             if cid in cid_map:
                 target = cid_map[cid].unsqueeze(0)
+                
+                # For side_effects with filtering, append the "has_other_SEs" flag
+                if task_name == 'side_effects' and hasattr(self, 'has_other_ses_map') and len(self.has_other_ses_map) > 0:
+                    has_other = torch.tensor([[self.has_other_ses_map.get(cid, 0.0)]], dtype=torch.float32)
+                    target = torch.cat([target, has_other], dim=1)
+                
                 setattr(data, f"y_{task_name}", target)
                 setattr(data, f"mask_{task_name}", torch.tensor([True], dtype=torch.bool))
                 
