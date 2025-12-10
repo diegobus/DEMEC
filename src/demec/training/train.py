@@ -17,34 +17,30 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     return config
 
-def main():
-    parser = argparse.ArgumentParser(description="Train Graph Models (GCN or GAT)")
-    
-    # Config file argument
-    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
-    
-    # Optional CLI overrides (can override config values)
-    parser.add_argument("--model", type=str, choices=["gcn", "gat"], help="Model architecture")
-    parser.add_argument("--epochs", type=int, help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, help="Batch size")
-    parser.add_argument("--lr", type=float, help="Learning rate")
-    parser.add_argument("--seed", type=int, help="Random seed")
-    parser.add_argument("--device", type=str, default=None, help="Device (cpu/cuda)")
-    
-    args = parser.parse_args()
-    
-    # Load configuration
-    config = load_config(args.config)
-    
-    # Override config with CLI args if provided
-    if args.model: config['model']['architecture'] = args.model
-    if args.epochs: config['training']['epochs'] = args.epochs
-    if args.batch_size: config['training']['batch_size'] = args.batch_size
-    if args.lr: config['training']['lr'] = args.lr
-    if args.seed: config['training']['seed'] = args.seed
-    
-    print(f"Loaded Configuration: {config}")
-    
+import sys
+import os
+import argparse
+import torch
+import yaml
+from torch_geometric.loader import DataLoader
+
+from demec.data.data_loader import GraphStructureDataset, make_splits
+from demec.utils.eval_metrics import recall_at_all
+from demec.models.gcn_baseline import GCNBackbone
+from demec.models.gat import GATBackbone
+from demec.models.multitask import MultiTaskGNN
+from demec.models.heads import PredictionHead
+
+def load_config(config_path):
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+def train_model(config, device_str=None):
+    """
+    Executes the training loop based on the provided configuration.
+    Returns the final validation loss.
+    """
     # Extract params for cleaner code
     model_cfg = config['model']
     train_cfg = config['training']
@@ -54,8 +50,8 @@ def main():
     torch.manual_seed(train_cfg['seed'])
     
     # Set device
-    if args.device:
-        device = torch.device(args.device)
+    if device_str:
+        device = torch.device(device_str)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -137,6 +133,8 @@ def main():
 
     print(f"Starting training loop for {train_cfg['epochs']} epochs...")
 
+    final_val_loss = 0.0
+
     for epoch in range(train_cfg['epochs']):
         model.train()
         total_train_loss = 0.0
@@ -215,12 +213,47 @@ def main():
         avg_train_recall = total_recall / len(train_ds)
         avg_val_loss = val_loss / len(val_ds)
         avg_val_recall = val_recall / len(val_ds)
+        
+        final_val_loss = avg_val_loss
 
         print(
             f"Epoch {epoch+1} | "
             f"train loss: {avg_train_loss:.4f} | train recall: {avg_train_recall:.4f} | "
             f"val loss: {avg_val_loss:.4f} | val recall: {avg_val_recall:.4f}"
         )
+    
+    return final_val_loss
+
+def main():
+    parser = argparse.ArgumentParser(description="Train Graph Models (GCN or GAT)")
+    
+    # Config file argument
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
+    
+    # Optional CLI overrides (can override config values)
+    parser.add_argument("--model", type=str, choices=["gcn", "gat"], help="Model architecture")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, help="Batch size")
+    parser.add_argument("--lr", type=float, help="Learning rate")
+    parser.add_argument("--seed", type=int, help="Random seed")
+    parser.add_argument("--device", type=str, default=None, help="Device (cpu/cuda)")
+    
+    args = parser.parse_args()
+    
+    # Load configuration
+    config = load_config(args.config)
+    
+    # Override config with CLI args if provided
+    if args.model: config['model']['architecture'] = args.model
+    if args.epochs: config['training']['epochs'] = args.epochs
+    if args.batch_size: config['training']['batch_size'] = args.batch_size
+    if args.lr: config['training']['lr'] = args.lr
+    if args.seed: config['training']['seed'] = args.seed
+    
+    print(f"Loaded Configuration: {config}")
+    
+    # Run training
+    train_model(config, device_str=args.device)
 
 if __name__ == "__main__":
     main()
