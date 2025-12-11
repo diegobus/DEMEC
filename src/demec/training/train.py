@@ -472,16 +472,13 @@ def main():
     )
     train_ds, val_ds, test_ds = make_splits(dataset, train=0.8, val=0.1, seed=cfg.seed)
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size)
-    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size, num_workers=4, pin_memory=True)
 
     # Create model
     model, loss_funcs, task_weights, train_tasks, eval_tasks = setup_model(dataset, cfg, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=1e-6)
-    
-    # Add cosine annealing LR scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr/100)
 
     # Setup experiment logger
     logger = ExperimentLogger(cfg, log_dir=cfg.log_dir, checkpoint_dir=cfg.checkpoint_dir)
@@ -561,9 +558,6 @@ def main():
         
         if logger.save_checkpoint(epoch, model, optimizer, current_val_metric, metric_name):
             print(f"    Saved best model ({metric_name}: {metric_value:.4f})")
-        
-        # Step scheduler
-        scheduler.step()
         
         # Early stopping check
         if current_val_metric > best_val_metric:
