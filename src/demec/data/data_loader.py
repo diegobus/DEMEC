@@ -29,6 +29,7 @@ class GraphDataset(Dataset):
         self.task_cid_maps = {}
         self.task_dims = {}
         self.has_other_ses_map = {}  # Track drugs with non-top-N side effects
+        self.task_stats = {}  # Store mean/std for regression tasks
 
         for task_name, csv_path in self.task_configs.items():
             df = pd.read_csv(csv_path).set_index("cid")
@@ -51,6 +52,22 @@ class GraphDataset(Dataset):
                 print(f"Limited side_effects to top {max_side_effects} (from {len(col_sums)} total)")
                 print(f"  {sum(self.has_other_ses_map.values())} drugs have side effects not in top {max_side_effects}")
 
+            # Normalize regression tasks (molprops)
+            if task_name == 'molprops':
+                # Compute mean and std for normalization
+                mean = df.mean(axis=0).values
+                std = df.std(axis=0).values
+                std[std == 0] = 1.0  # Avoid division by zero
+                
+                self.task_stats[task_name] = {
+                    'mean': torch.tensor(mean, dtype=torch.float32),
+                    'std': torch.tensor(std, dtype=torch.float32)
+                }
+                
+                # Normalize the dataframe
+                df = (df - mean) / std
+                print(f"Normalized {task_name}: mean={mean.round(2)}, std={std.round(2)}")
+            
             # Store dimensions for model initialization
             # Add +1 for "has_other_SEs" flag if we filtered side effects
             if task_name == 'side_effects' and max_side_effects is not None:

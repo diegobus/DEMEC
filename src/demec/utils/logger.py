@@ -41,8 +41,9 @@ class ExperimentLogger:
         self.writer = SummaryWriter(self.log_path)
         
         # Track best model
-        self.best_val_map = 0.0
+        self.best_val_metric = float('-inf')  # Start at -inf to handle both positive and negative metrics
         self.best_epoch = 0
+        self.best_metric_name = None
         
         print(f"Experiment name: {self.exp_name}")
         print(f"TensorBoard logs: {self.log_path}")
@@ -104,40 +105,52 @@ class ExperimentLogger:
         for task_name, task_loss in val_task_losses.items():
             self.writer.add_scalar(f'TaskLoss/val_{task_name}', task_loss / val_size, epoch)
         
-        # 3. Side effects metrics (primary task)
+        # 3. Task-specific metrics (nested: {task_name: {metric_name: value}})
         if train_metrics:
-            self.writer.add_scalar('Metrics/train_mAP', train_metrics.get('mAP', 0), epoch)
-            self.writer.add_scalar('Metrics/train_P@50', train_metrics.get('P@50', 0), epoch)
-            self.writer.add_scalar('Metrics/train_P@100', train_metrics.get('P@100', 0), epoch)
-            self.writer.add_scalar('Metrics/train_AUROC', train_metrics.get('AUROC', 0), epoch)
+            for task_name, task_metrics in train_metrics.items():
+                if isinstance(task_metrics, dict):
+                    for metric_name, metric_value in task_metrics.items():
+                        # Convert to scalar if needed
+                        if isinstance(metric_value, (list, tuple)):
+                            continue  # Skip non-scalar metrics
+                        if hasattr(metric_value, 'item'):
+                            metric_value = metric_value.item()
+                        self.writer.add_scalar(f'Metrics/train_{task_name}_{metric_name}', float(metric_value), epoch)
         
         if val_metrics:
-            self.writer.add_scalar('Metrics/val_mAP', val_metrics.get('mAP', 0), epoch)
-            self.writer.add_scalar('Metrics/val_P@50', val_metrics.get('P@50', 0), epoch)
-            self.writer.add_scalar('Metrics/val_P@100', val_metrics.get('P@100', 0), epoch)
-            self.writer.add_scalar('Metrics/val_AUROC', val_metrics.get('AUROC', 0), epoch)
+            for task_name, task_metrics in val_metrics.items():
+                if isinstance(task_metrics, dict):
+                    for metric_name, metric_value in task_metrics.items():
+                        # Convert to scalar if needed
+                        if isinstance(metric_value, (list, tuple)):
+                            continue  # Skip non-scalar metrics
+                        if hasattr(metric_value, 'item'):
+                            metric_value = metric_value.item()
+                        self.writer.add_scalar(f'Metrics/val_{task_name}_{metric_name}', float(metric_value), epoch)
         
         # 4. Learning rate
         self.writer.add_scalar('LearningRate', optimizer.param_groups[0]['lr'], epoch)
         
         return avg_train_loss, avg_val_loss
     
-    def save_checkpoint(self, epoch, model, optimizer, val_map):
+    def save_checkpoint(self, epoch, model, optimizer, val_metric, metric_name='mAP'):
         """
-        Save model checkpoint if it's the best so far.
+        Save model checkpoint if validation metric improved.
         
         Args:
-            epoch: Current epoch
+            epoch: Current epoch number
             model: Model to save
-            optimizer: Optimizer state
-            val_map: Current validation mAP
+            optimizer: Optimizer to save
+            val_metric: Current validation metric value
+            metric_name: Name of the metric (e.g., 'mAP', 'MSE', 'Tanimoto')
             
         Returns:
-            bool: True if checkpoint was saved
+            True if checkpoint was saved, False otherwise
         """
-        if val_map > self.best_val_map:
-            self.best_val_map = val_map
+        if val_metric > self.best_val_metric:
+            self.best_val_metric = val_metric
             self.best_epoch = epoch + 1
+            self.best_metric_name = metric_name
             
             if self.args.save_model:
                 os.makedirs(self.checkpoint_dir, exist_ok=True)
@@ -150,7 +163,8 @@ class ExperimentLogger:
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'val_mAP': self.best_val_map,
+                    'val_metric': self.best_val_metric,
+                    'metric_name': metric_name,
                     'args': args_dict,
                 }, checkpoint_path)
                 
@@ -167,12 +181,19 @@ class ExperimentLogger:
             final_val_metrics: Final validation metrics
         """
         # Log hyperparameters with final metrics
+        # Get primary eval task metrics
+        primary_task_metrics = list(final_val_metrics.values())[0] if final_val_metrics else {}
+        
         final_metrics = {
-            'hparam/val_mAP': self.best_val_map,
-            'hparam/val_P@50': final_val_metrics.get('P@50', 0),
-            'hparam/val_AUROC': final_val_metrics.get('AUROC', 0),
+            'hparam/best_metric': self.best_val_metric,
             'hparam/best_epoch': self.best_epoch,
         }
+        
+        # Add task-specific metrics if available
+        for metric_name in ['mAP', 'P@50', 'AUROC', 'R²', 'MSE', 'Bit_Acc', 'Tanimoto']:
+            if metric_name in primary_task_metrics:
+                final_metrics[f'hparam/val_{metric_name}'] = primary_task_metrics[metric_name]
+        
         self.writer.add_hparams(self.hparams, final_metrics)
         
         # Close writer
@@ -181,7 +202,8 @@ class ExperimentLogger:
         # Print summary
         print("\n" + "=" * 80)
         print(f"Training complete!")
-        print(f"Best validation mAP: {self.best_val_map:.4f} (epoch {self.best_epoch})")
+        metric_name = self.best_metric_name if self.best_metric_name else 'metric'
+        print(f"Best validation {metric_name}: {self.best_val_metric:.4f} (epoch {self.best_epoch})")
         print(f"TensorBoard logs: {self.log_path}")
         if self.args.save_model and hasattr(self, 'checkpoint_path'):
             print(f"Best model saved: {self.checkpoint_path}")

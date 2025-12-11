@@ -8,6 +8,7 @@ setup(
     install_requires=[
         "torch",
         "torch-geometric",
+        "torch-scatter",
         "networkx",
         "pandas",
         "numpy",

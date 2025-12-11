@@ -1,0 +1,23 @@
+experiment_name: "06_multitask_gat"
+
+model:
+  architecture: "gat"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "mean"
+
+training:
+  epochs: 50
+  batch_size: 32
+  lr: 0.001
+  seed: 42
+  task_weights: "side_effects:1.0,atc:0.8,maccs:0.2"
+
+data:
+  train_tasks: "side_effects,atc,maccs"
+  eval_tasks: "side_effects"
+
+# Experiment 6: GAT architecture (vs GCN)
+# Same multi-task setup but with attention-based message passing

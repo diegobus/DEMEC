@@ -1,11 +1,12 @@
-experiment_name: "multitask_gat_baseline"
+experiment_name: "04c_side_effects_attention"
 
 model:
-  architecture: "gat"
-  hidden_dim: 64
+  architecture: "gcn"
+  hidden_dim: 128
   num_layers: 5
   dropout: 0.2
   heads: 3
+  pooling: "attention"
 
 training:
   epochs: 50
@@ -14,6 +15,5 @@ training:
   seed: 42
 
 data:
-  # max_side_effects: 200
-  train_tasks: "side_effects,atc,maccs"
+  train_tasks: "side_effects"
   eval_tasks: "side_effects"

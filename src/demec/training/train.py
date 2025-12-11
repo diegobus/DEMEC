@@ -92,14 +92,16 @@ def setup_model(dataset, args, device):
             task_weights[task_name] = 0.0  # No contribution to loss
 
     # Create backbone
-    print(f"\nInitializing {args.model.upper()} backbone...")
+    pooling = getattr(args, 'pooling', 'mean')
+    print(f"\nInitializing {args.model.upper()} backbone (pooling: {pooling})...")
     backbone = GNNBackbone(
         input_dim=args.input_dim,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         dropout=args.dropout,
         conv_type=args.model,
-        heads=args.heads
+        heads=args.heads,
+        pooling=pooling
     )
     model = MultiTaskGNN(backbone, heads_dict)
 
@@ -292,10 +294,10 @@ def train_model(config, device_str=None):
     cfg.train_tasks = data_cfg.get('train_tasks', data_cfg.get('tasks_enabled', 'side_effects,atc,maccs'))
     cfg.eval_tasks = data_cfg.get('eval_tasks', cfg.train_tasks)  # Default to same as train_tasks
 
-    # Graph configuration (always heterogeneous)
+    # Graph configuration
     cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
     cfg.input_dim = model_cfg.get('input_dim', 154)
-    cfg.feature_key = data_cfg.get('feature_key', 'atom_features')
+    cfg.feature_key = data_cfg.get('feature_key', 'x')
 
     # Set seed
     torch.manual_seed(cfg.seed)
@@ -311,7 +313,7 @@ def train_model(config, device_str=None):
         'side_effects': "data/processed/cid_se_matrix.csv",
         'atc': "data/processed/cid_atc_l3_matrix.csv",
         'maccs': "data/processed/cid_maccs_matrix.csv",
-        'molprops': "data/processed/cid_molprops_matrix.csv"
+        'molprops': "data/processed/cid_molprops_matrix_simple.csv"
     }
 
     # Load dataset
@@ -367,6 +369,8 @@ def main():
     parser.add_argument("--num_layers", type=int, help="Number of GNN layers")
     parser.add_argument("--dropout", type=float, help="Dropout rate")
     parser.add_argument("--heads", type=int, help="Number of attention heads (GAT only)")
+    parser.add_argument("--pooling", type=str, choices=["mean", "sum", "max", "mlp", "attention"],
+                        help="Graph pooling method")
 
     # Task selection and weighting (for ablation studies)
     parser.add_argument("--tasks", type=str, help="Comma-separated list of tasks to train")
@@ -411,6 +415,7 @@ def main():
     cfg.num_layers = args.num_layers if args.num_layers else model_cfg.get('num_layers', 5)
     cfg.dropout = args.dropout if args.dropout else model_cfg.get('dropout', 0.2)
     cfg.heads = args.heads if args.heads else model_cfg.get('heads', 3)
+    cfg.pooling = args.pooling if args.pooling else model_cfg.get('pooling', 'mean')
     cfg.max_side_effects = data_cfg.get('max_side_effects', None)
     cfg.focal_alpha = args.focal_alpha
     cfg.clip_grad_norm = args.clip_grad_norm
@@ -431,10 +436,10 @@ def main():
         cfg.train_tasks = data_cfg.get('train_tasks', data_cfg.get('tasks_enabled', 'side_effects,atc,maccs'))
         cfg.eval_tasks = data_cfg.get('eval_tasks', cfg.train_tasks)
 
-    # Graph configuration (always heterogeneous)
+    # Graph configuration
     cfg.graphs_dir = data_cfg.get('graphs_dir', 'data/processed/graphs_v2/')
     cfg.input_dim = model_cfg.get('input_dim', 154)
-    cfg.feature_key = data_cfg.get('feature_key', 'atom_features')
+    cfg.feature_key = data_cfg.get('feature_key', 'x')
 
     print(f"Loaded Configuration: {config}")
     print(f"Final Config: {vars(cfg)}")
@@ -450,18 +455,18 @@ def main():
     print(f"Using device: {device}")
 
     # Task configuration
-    task_config = {
+    task_files = {
         'side_effects': "data/processed/cid_se_matrix.csv",
         'atc': "data/processed/cid_atc_l3_matrix.csv",
         'maccs': "data/processed/cid_maccs_matrix.csv",
-        'molprops': "data/processed/cid_molprops_matrix.csv"
+        'molprops': "data/processed/cid_molprops_matrix_simple.csv"
     }
 
     # Load dataset
     print(f"Loading graph dataset...")
     dataset = GraphDataset(
         cfg.graphs_dir,
-        task_config=task_config,
+        task_config=task_files,
         feature_key=cfg.feature_key,
         max_side_effects=cfg.max_side_effects
     )
@@ -473,7 +478,10 @@ def main():
 
     # Create model
     model, loss_funcs, task_weights, train_tasks, eval_tasks = setup_model(dataset, cfg, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=1e-6)
+    
+    # Add cosine annealing LR scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr/100)
 
     # Setup experiment logger
     logger = ExperimentLogger(cfg, log_dir=cfg.log_dir, checkpoint_dir=cfg.checkpoint_dir)
@@ -485,8 +493,21 @@ def main():
     print(f"Task weights: {task_weights}")
     if cfg.clip_grad_norm:
         print(f"Gradient clipping: max_norm={cfg.clip_grad_norm}")
-    print(f"Metrics: mAP (primary), P@50, P@100, AUROC")
+    
+    # Determine primary metric based on primary eval task
+    primary_task = eval_tasks[0]
+    if primary_task == 'molprops':
+        print(f"Metrics: R² (primary), MSE, MAE")
+    elif primary_task == 'maccs':
+        print(f"Metrics: Bit Accuracy (primary), Hamming, Tanimoto")
+    else:
+        print(f"Metrics: mAP (primary), P@50, P@100, AUROC")
     print("-" * 80)
+
+    # Early stopping (disabled for fair experiment comparison)
+    best_val_metric = float('-inf')
+    patience = 10000  # Effectively disabled
+    patience_counter = 0
 
     for epoch in range(cfg.epochs):
         train_loss, train_task_losses, train_metrics = train_epoch(
@@ -538,8 +559,21 @@ def main():
             metric_name = 'mAP'
             metric_value = task_metrics.get('mAP', 0)
         
-        if logger.save_checkpoint(epoch, model, optimizer, current_val_metric):
+        if logger.save_checkpoint(epoch, model, optimizer, current_val_metric, metric_name):
             print(f"    Saved best model ({metric_name}: {metric_value:.4f})")
+        
+        # Step scheduler
+        scheduler.step()
+        
+        # Early stopping check
+        if current_val_metric > best_val_metric:
+            best_val_metric = current_val_metric
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"\nEarly stopping triggered after {epoch+1} epochs (patience={patience})")
+                break
 
     # Finalize logging
     logger.finalize(val_metrics)

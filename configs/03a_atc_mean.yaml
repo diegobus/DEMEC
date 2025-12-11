@@ -1,0 +1,19 @@
+experiment_name: "03a_atc_mean"
+
+model:
+  architecture: "gcn"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "mean"
+
+training:
+  epochs: 50
+  batch_size: 32
+  lr: 0.001
+  seed: 42
+
+data:
+  train_tasks: "atc"
+  eval_tasks: "atc"

@@ -1,0 +1,23 @@
+experiment_name: "07_multitask_mlp_pooling"
+
+model:
+  architecture: "gcn"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "mlp"
+
+training:
+  epochs: 50
+  batch_size: 32
+  lr: 0.001
+  seed: 42
+  task_weights: "side_effects:1.0,atc:0.8,maccs:0.2"
+
+data:
+  train_tasks: "side_effects,atc,maccs"
+  eval_tasks: "side_effects"
+
+# Experiment 7: MLP pooling (vs mean pooling)
+# Tests if learnable pooling improves performance
