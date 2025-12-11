@@ -1,0 +1,24 @@
+experiment_name: "08_multitask_se_atc_only"
+
+model:
+  architecture: "gat"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "attention"
+
+training:
+  epochs: 300
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  task_weights: "side_effects:1.0,atc:0.8"
+
+data:
+  train_tasks: "side_effects,atc"
+  eval_tasks: "side_effects"
+
+# Experiment 10: SE + ATC only (no MACCS)
+# Tests if MACCS fingerprints help or are just noise
+# Both SE and ATC are multi-label classification (similar tasks)

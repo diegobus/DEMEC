@@ -472,9 +472,9 @@ def main():
     )
     train_ds, val_ds, test_ds = make_splits(dataset, train=0.8, val=0.1, seed=cfg.seed)
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, num_workers=0)
+    test_loader = DataLoader(test_ds, batch_size=cfg.batch_size, num_workers=0)
 
     # Create model
     model, loss_funcs, task_weights, train_tasks, eval_tasks = setup_model(dataset, cfg, device)

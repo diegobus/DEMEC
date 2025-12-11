@@ -1,12 +1,12 @@
-experiment_name: "04b_se_mlp_gcn"
+experiment_name: "04c_se_attention_gat"
 
 model:
-  architecture: "gcn"
+  architecture: "gat"
   hidden_dim: 128
   num_layers: 5
   dropout: 0.2
   heads: 3
-  pooling: "mlp"
+  pooling: "attention"
 
 training:
   epochs: 500

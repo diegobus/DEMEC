@@ -1,7 +1,7 @@
-experiment_name: "03a_atc_mean_gcn"
+experiment_name: "04a_se_mean_gat"
 
 model:
-  architecture: "gcn"
+  architecture: "gat"
   hidden_dim: 128
   num_layers: 5
   dropout: 0.2
@@ -15,5 +15,5 @@ training:
   seed: 42
 
 data:
-  train_tasks: "atc"
-  eval_tasks: "atc"
+  train_tasks: "side_effects"
+  eval_tasks: "side_effects"

@@ -1,12 +1,12 @@
-experiment_name: "03a_atc_mean_gcn"
+experiment_name: "04b_se_mlp_gat"
 
 model:
-  architecture: "gcn"
+  architecture: "gat"
   hidden_dim: 128
   num_layers: 5
   dropout: 0.2
   heads: 3
-  pooling: "mean"
+  pooling: "mlp"
 
 training:
   epochs: 500
@@ -15,5 +15,5 @@ training:
   seed: 42
 
 data:
-  train_tasks: "atc"
-  eval_tasks: "atc"
+  train_tasks: "side_effects"
+  eval_tasks: "side_effects"

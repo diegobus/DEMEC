@@ -1,4 +1,4 @@
-experiment_name: "04a_side_effects_mean"
+experiment_name: "04a_se_mean_gcn"
 
 model:
   architecture: "gcn"
@@ -9,9 +9,9 @@ model:
   pooling: "mean"
 
 training:
-  epochs: 50
+  epochs: 500
   batch_size: 32
-  lr: 0.001
+  lr: 0.0001
   seed: 42
 
 data:

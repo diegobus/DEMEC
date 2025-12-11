@@ -1,12 +1,12 @@
-experiment_name: "03a_atc_mean_gcn"
+experiment_name: "03c_atc_attention_gat"
 
 model:
-  architecture: "gcn"
+  architecture: "gat"
   hidden_dim: 128
   num_layers: 5
   dropout: 0.2
   heads: 3
-  pooling: "mean"
+  pooling: "attention"
 
 training:
   epochs: 500
