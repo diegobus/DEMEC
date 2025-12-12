@@ -1,204 +1,286 @@
 # DEMEC: Drug Embedding & Multi-Effect Classification
 
-## Overview
-Assessing drug side effects represents a critical challenge for clinicians weighing a drug’s benefits against its risks and for pharmaceutical companies developing novel therapeutics. However, accurate predictions remain challenging because small changes in the chemical structure or properties of a drug can precipitate new side effects, and the number of possible side effects ranges in the thousands.  
+Multi-task Graph Neural Network for predicting drug side effects from molecular structure.
 
-DEMEC (Drug Embedding & Multi-Effect Classification) aims to leverage **Graph Neural Networks (GNNs)** to address these challenges by learning rich molecular embeddings and performing **multi-label classification** of side effects.
-
----
-
-## Datasets
-
-### SIDER 4.1 (Side Effect Resource)
-- Source: [http://sideeffects.embl.de/](http://sideeffects.embl.de/)
-- Provides information about 5,868 side effects, 1,430 drugs, and 139,756 drug–side-effect interactions.
-- Includes ATC codes that identify and group drugs based on pharmacological and therapeutic properties.
-
-### DrugBank Database
-- Source: [https://pubmed.ncbi.nlm.nih.gov/29126136/](https://pubmed.ncbi.nlm.nih.gov/29126136/)
-- Provides detailed drug chemical properties and molecular structures.
-- Used to link chemical structure information to the SIDER dataset via CID/ATC codes.
-
-These datasets together allow us to build a graph representation that connects molecular substructures, drugs, and their associated side effects.
-
----
-
-## Data Processing Pipeline
-
-Two scripts handle the preprocessing and integration of SIDER + DrugBank data:
-
-- **`scripts/process_edges.py`**  
-  Cleans the raw SIDER drug–side effect mappings:
-  - Filters `meddra_all_se.tsv` to keep only **Preferred Terms (PT)** (removing redundant LLTs).  
-  - Extracts **PubChem CIDs** from STITCH IDs for compatibility with DrugBank.  
-  - Merges in frequency metadata from `meddra_freq.tsv` (`freq_lo`, `freq_hi`, `freq_text`, `placebo`).  
-  - Deduplicates to unique `(cid, se_id)` pairs.  
-  - Saves to `data/processed/edges.csv` (≈145k PT-level drug–SE pairs).
-
-- **`scripts/aggregate_data.py`**  
-  Fetches molecular structures and builds graph representations:
-  - Queries **PubChem** for SMILES strings per CID and caches them in `smiles_cache.csv`.  
-  - Uses **PySMILES** to convert each SMILES string into a **NetworkX** molecular graph.  
-  - Saves each graph as a `.gpickle` file under `data/processed/graphs/`.
-
-Both scripts are modular and can be rerun independently as new data or mappings are added.
-
-### Directory Overview
-
-```
-data/
-├─ drug_names.tsv                  # SIDER drug names
-├─ drug_atc.tsv                    # ATC codes
-├─ meddra_all_se.tsv               # SIDER side-effect mappings
-├─ meddra_freq.tsv                 # frequency annotations
-├─ processed/
-│  ├─ edges.csv                    # cleaned PT-level drug–SE mappings
-│  ├─ smiles_cache.csv             # CID–SMILES lookup table
-│  ├─ cid_se_matrix.csv            # multi-hot encoded targets
-│  └─ graphs/                      # per-drug NetworkX molecular graphs
-src/
-└─ demec/                          # Main package
-   ├─ data/                        # Data loaders
-   ├─ models/                      # GNN backbones and heads
-   ├─ training/                    # Training scripts
-   └─ utils/                       # Metrics and inspection tools
-```
-
----
-
-## Quickstart
-
-### 1. Installation
+## Quick Start
 
 ```bash
+# Install dependencies
+conda env create -f environment.yml
+conda activate demec
+
+# Train model (recommended config)
+python -m demec.training.train --config configs/default.yaml
+```
+
+## Overview
+
+DEMEC uses Graph Neural Networks to predict drug side effects and therapeutic properties from molecular structure alone. The model learns from 1,430 drugs with 4,251 documented side effects from the SIDER database.
+
+**Key Features:**
+- Heterogeneous molecular graphs with typed edges (bond types)
+- Multi-task learning (side effects, ATC classes, MACCS fingerprints)
+- Focal loss for handling extreme class imbalance
+- Attention-based graph pooling
+
+## Architecture
+
+```
+Molecular Graph → GNN Backbone → Graph Pooling → Task-Specific Heads
+                  (GAT/GCN)      (Attention)     (SE, ATC, MACCS)
+```
+
+**Model Components:**
+- **Backbone**: GAT or GCN with heterogeneous edge types
+- **Pooling**: Mean, attention, or MLP-based aggregation
+- **Heads**: Separate prediction heads per task
+- **Loss**: Focal loss (SE), BCE (ATC/MACCS), MSE (molecular properties)
+
+## Data
+
+### Datasets
+- **SIDER 4.1**: 1,430 drugs, 4,251 side effects, 139,756 interactions
+- **PubChem**: SMILES strings and compound data
+
+### Tasks
+| Task | Type | Dimension | Loss |
+|------|------|-----------|------|
+| Side Effects | Multi-label classification | 4,251 (or top-N) | Focal Loss |
+| ATC Classes | Multi-label classification | 167 | BCEWithLogits |
+| MACCS Fingerprints | Multi-label classification | 166 | BCEWithLogits |
+| Molecular Weight | Regression | 1 | MSE |
+
+### Data Split
+- **80/10/10** train/validation/test split
+- Fixed seed (42) for reproducibility
+- Random split over drug CIDs (no stratification)
+
+## Installation
+
+### Requirements
+- Python 3.8+
+- PyTorch 2.0+
+- PyTorch Geometric
+- RDKit
+- See `environment.yml` for complete list
+
+### Setup
+
+```bash
+# Clone repository
+git clone https://github.com/diegobus/DEMEC.git
+cd DEMEC
+
 # Create environment
 conda env create -f environment.yml
 conda activate demec
 
-# The package is installed in editable mode automatically.
-# If needed, manually install:
+# Install package
 pip install -e .
 ```
 
-### 2. Data Preparation
+## Data Preparation
+
+### 1. Download Raw Data
+
+Place SIDER files in `data/raw/`:
+- `meddra_all_se.tsv` - Side effect mappings
+- `drug_atc.tsv` - ATC classifications
+- `drug_names.tsv` - Drug names
+
+### 2. Run Preprocessing Pipeline
 
 ```bash
-# Build PT-level edges and frequency data
-python scripts/process_edges.py
+# Process side effect data
+python scripts/aggregate_sider.py
 
-# Fetch SMILES and build molecular graphs
-python scripts/aggregate_sider.py data/drug_names.tsv data/drug_atc.tsv
+# Build ATC matrix
+python scripts/build_atc_matrix.py
+
+# Build MACCS fingerprints
+python scripts/build_maccs_matrix.py
+
+# Extract molecular properties
+python scripts/extract_molecular_properties.py
+
+# Build molecular graphs
+python scripts/build_molecular_graphs.py
 ```
 
-### 3. Training
+**Output:**
+```
+data/processed/
+├── cid_se_matrix.csv              # Side effect labels (1430 x 4251)
+├── cid_atc_l3_matrix.csv          # ATC classifications (1430 x 167)
+├── cid_maccs_matrix.csv           # MACCS fingerprints (1430 x 166)
+├── cid_molprops_matrix_simple.csv # Molecular properties
+└── graphs_v2/                     # Molecular graphs (.gpickle)
+```
 
-You can train using either raw graph features or pre-computed embeddings (e.g., MolCLR).
+## Training
 
-**Standard Training:**
+### Using Config Files (Recommended)
+
 ```bash
-python src/demec/training/train.py \
+# Multi-task training (default)
+python -m demec.training.train --config configs/default.yaml
+
+# Single-task baseline
+python -m demec.training.train --config configs/single_task_side_effects.yaml
+
+# GCN baseline
+python -m demec.training.train --config configs/gcn_baseline.yaml
+```
+
+### Command-Line Options
+
+```bash
+python -m demec.training.train \
+    --config configs/default.yaml \
+    --epochs 300 \
+    --batch_size 32 \
+    --lr 0.0001 \
     --model gat \
-    --epochs 50 \
-    --batch_size 32
+    --pooling attention
 ```
 
-**Training with Pre-computed Embeddings (e.g. MolCLR):**
+### Key Parameters
+
+| Parameter | Options | Description |
+|-----------|---------|-------------|
+| `--model` | `gcn`, `gat` | GNN architecture |
+| `--pooling` | `mean`, `attention`, `mlp` | Graph pooling method |
+| `--hidden_dim` | int | Hidden layer size (default: 128) |
+| `--num_layers` | int | Number of GNN layers (default: 5) |
+| `--dropout` | float | Dropout rate (default: 0.2) |
+| `--focal_alpha` | float | Focal loss alpha (default: 0.25) |
+
+See `configs/README.md` for detailed configuration guide.
+
+## Configuration
+
+Example `default.yaml`:
+
+```yaml
+experiment_name: "multitask_gat"
+
+model:
+  architecture: "gat"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "attention"
+
+training:
+  epochs: 300
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  task_weights: "side_effects:1.0,atc:1.0,maccs:1.0"
+  focal_alpha: 0.25
+
+data:
+  train_tasks: "side_effects,atc,maccs"
+  eval_tasks: "side_effects"
+  max_side_effects: 100  # Top-100 most common
+```
+
+## Evaluation
+
+### Metrics
+
+**Classification Tasks:**
+- mAP (mean Average Precision)
+- AUROC (Area Under ROC Curve)
+- Precision, Recall, F1
+
+**Regression Tasks:**
+- MAE (Mean Absolute Error)
+- RMSE (Root Mean Squared Error)
+- R^2 Score
+
+### Monitoring
+
+TensorBoard logs are saved to `runs/`:
+
 ```bash
-python src/demec/training/train.py \
-    --model gat \
-    --epochs 50 \
-    --graphs_dir data/processed/graphs_molclr/ \
-    --feature_key emb \
-    --node_dim 300
+tensorboard --logdir runs/
 ```
 
----
+### Checkpoints
 
-## Graph Inspection
+Best models are saved to `checkpoints/` based on validation mAP.
 
-To verify the attributes and embeddings of your graph data:
+## Results
 
-```bash
-python src/demec/utils/inspect_graph.py data/processed/graphs_molclr/100000085.gpickle
+### Side Effect Prediction (Top-100)
+
+| Model | Pooling | mAP | AUROC |
+|-------|---------|-----|-------|
+| GAT | Attention | 0.679 | 0.657 |
+| GAT | Mean | 0.669 | 0.652 |
+| GCN | Attention | 0.665 | 0.648 |
+| GCN | Mean | 0.658 | 0.645 |
+
+### Multi-task Learning Impact
+
+| Configuration | Side Effects mAP | Notes |
+|---------------|------------------|-------|
+| Single-task | 0.669 | Baseline |
+| Multi-task (SE + ATC + MACCS) | 0.679 | +1.5% improvement |
+| Multi-task (all 4,251 SEs) | 0.427 | Label noise degrades performance |
+
+**Key Findings:**
+- Attention pooling outperforms mean pooling
+- GAT slightly better than GCN for this task
+- Multi-task learning helps with clean labels (top-N filtering)
+- Label quality matters more than task difficulty
+
+## Project Structure
+
 ```
-
----
-
-## Problem Definition
-
-### Goal
-Given a **novel drug** and its **chemical structure**, predict which **side effects** it may cause in patients.
-
-### Metric
-- **Primary:** ROC-AUC (multi-class, one-vs-rest)
-- **Secondary:** True Positive Rate (TPR) and False Positive Rate (FPR) per side effect to analyze under- or over-prediction.
-
-### Why These Datasets
-- **SIDER**: High-quality, well-documented dataset with drug–side-effect mappings and ATC codes for integration.
-- **DrugBank**: Industry-standard resource linking structure and properties; allows transfer learning between datasets.
-
----
-
-## Graph Representation
-Each **drug molecule** is represented as a graph:
-- **Nodes:** Atoms (features such as atom type, degree, formal charge, hybridization, aromaticity)
-- **Edges:** Chemical bonds (features include bond type and stereochemistry)
-
-Connections are also drawn between drugs and side effects or between drugs that share molecular substructures, forming a rich relational network for learning.
-
----
-
-## Model Architecture
-
-### Encoder
-A **Graph Neural Network (GNN)** serves as the encoder, learning an embedding for each molecule:
-- **Baseline:** Graph Convolutional Network (GCN)
-- **Advanced Models:** Graph Attention Network (GAT), Attentive FP, and Message Passing Neural Network (MPNN) (if time permits)
-
-### Multi-Task Prediction Heads
-Each embedding is fed into multiple classification heads:
-1. **Side Effect Prediction (Primary Task)** – multi-label binary classification (≈5,000 outputs)
-2. **ATC Classification** – multi-label classification (14 outputs)
-3. **FDA Approval Status** – binary classification
-4. **Drug-Likeness (Lipinski’s Rule)** – binary classification
-5. **BBB Permeability** – binary classification
-6. **Hepatotoxicity** – binary classification
-
-### Loss Function
-$$
-L_{total} = L_{side\ effects} + \sum_i \lambda_i L_{auxiliary_i}
-$$
-Each loss term is a binary cross-entropy loss. The weights $\lambda_i$ balance auxiliary tasks, either uniformly (0.2) or through learned uncertainty-based weighting.
-
----
-
-## Motivation for GNNs and Multi-Task Learning
-- **Graph Structure Fit:** Molecules are naturally graph-structured, making GNNs ideal for representing atomic connectivity and chemical context.  
-- **Multi-Task Synergy:** Predicting related drug properties (ATC class, toxicity, permeability) helps the model learn more meaningful molecular embeddings that generalize to unseen drugs.
-
----
-
-## Novelty
-Previous approaches often required explicit molecular property annotations as model inputs, which are expensive to determine. DEMEC introduces these as **auxiliary losses** during training, enabling prediction from structure alone. This approach encourages the GNN to learn chemically robust representations even when auxiliary labels are missing.
-
----
-
-## Planned Experiments
-- **Baseline:** GCN with a single side-effect classification head  
-- **Multi-Task:** Add auxiliary prediction heads with masked losses  
-- **Ablations:** Remove individual heads and compare performance  
-- **Advanced Models:** Evaluate GAT and Attentive FP for improved aggregation
-
----
-
-## Metrics & Evaluation
-- ROC-AUC (macro/micro)
-- TPR/FPR per side effect
-- Embedding visualization (t-SNE) for molecular representation quality
-
----
+DEMEC/
+├── configs/                  # Configuration files
+│   ├── default.yaml         # Recommended config
+│   ├── single_task_side_effects.yaml
+│   ├── gcn_baseline.yaml
+│   └── README.md            # Config guide
+├── data/
+│   ├── raw/                 # Downloaded datasets
+│   └── processed/           # Preprocessed data
+├── scripts/                 # Data preprocessing
+│   ├── aggregate_sider.py
+│   ├── build_atc_matrix.py
+│   ├── build_maccs_matrix.py
+│   ├── build_molecular_graphs.py
+│   └── extract_molecular_properties.py
+├── src/demec/              # Main package
+│   ├── data/
+│   │   └── data_loader.py  # PyG dataset
+│   ├── models/
+│   │   ├── gnn_backbone.py # GNN architectures
+│   │   └── heads.py        # Prediction heads
+│   ├── training/
+│   │   └── train.py        # Training loop
+│   └── utils/
+│       ├── eval_metrics.py # Metrics computation
+│       ├── logger.py       # Experiment logging
+│       └── losses.py       # Focal loss
+├── checkpoints/            # Saved models
+├── runs/                   # TensorBoard logs
+├── environment.yml         # Conda environment
+└── README.md              # This file
+```
 
 ## References
+
 - **SIDER 4.1:** Kuhn et al., *Nucleic Acids Research* (2016). [http://sideeffects.embl.de/](http://sideeffects.embl.de/)  
 - **DrugBank:** Wishart et al., *Nucleic Acids Research* (2018). [https://pubmed.ncbi.nlm.nih.gov/29126136/](https://pubmed.ncbi.nlm.nih.gov/29126136/)  
 - **Multi-task GNNs for Molecular Prediction:** [https://pmc.ncbi.nlm.nih.gov/articles/PMC11606038/](https://pmc.ncbi.nlm.nih.gov/articles/PMC11606038/)
+- **Focal Loss:** Lin et al., *ICCV* (2017). [arXiv:1708.02002](https://arxiv.org/abs/1708.02002)
+- **Graph Attention Networks:** Veličković et al., *ICLR* (2018). [arXiv:1710.10903](https://arxiv.org/abs/1710.10903)
+
+## License
+
+MIT License

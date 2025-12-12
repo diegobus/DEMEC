@@ -3,13 +3,14 @@ import numpy as np
 import pandas as pd
 
 def compile_table(edges: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert edge list to a binary matrix for GNN model.
-    Rows are unique CIDs, columns are unique SE_IDs. 
-    """
+    """Convert edge list to binary matrix for GNN model.
     
-    # Can play with this later to make it depend on the frequency
-    # Now, it is a binary yes/no side effect listed
+    Args:
+        edges: DataFrame with 'cid' and 'se_id' columns
+        
+    Returns:
+        Binary matrix with drugs as rows and side effects as columns
+    """
     edges["value"] = 1 
 
     mat = (
@@ -23,10 +24,9 @@ def compile_table(edges: pd.DataFrame) -> pd.DataFrame:
         .astype(int)
     )
 
-    return mat.reset_index() 
+    return mat.reset_index()
 
 
-# CLI
 if __name__ == "__main__":
     
     if len(sys.argv) < 3:

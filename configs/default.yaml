@@ -1,0 +1,70 @@
+# Default Configuration for DEMEC
+# Multi-task Graph Neural Network for Drug Property Prediction
+
+experiment_name: "default_multitask"
+
+# Model Architecture
+model:
+  architecture: "gat"           # Options: "gcn", "gat"
+  input_dim: 154                # Node feature dimension (atom features)
+  hidden_dim: 128               # Hidden layer dimension
+  num_layers: 5                 # Number of GNN layers
+  dropout: 0.2                  # Dropout rate
+  heads: 3                      # Number of attention heads (GAT only)
+  pooling: "attention"          # Options: "mean", "sum", "max", "mlp", "attention"
+
+# Training Configuration
+training:
+  epochs: 300                   # Number of training epochs
+  batch_size: 32                # Batch size
+  lr: 0.0001                    # Learning rate
+  seed: 42                      # Random seed for reproducibility
+  log_dir: "runs"               # TensorBoard log directory
+  checkpoint_dir: "checkpoints" # Model checkpoint directory
+  
+  # Task weights for multitask learning (optional)
+  # Format: "task1:weight1,task2:weight2"
+  task_weights: "side_effects:1.0,atc:1.0,maccs:1.0"
+  
+  # Focal loss alpha for side effects (handles class imbalance)
+  focal_alpha: 0.25
+  
+  # Gradient clipping (optional, e.g., 1.0)
+  # clip_grad_norm: 1.0
+
+# Data Configuration
+data:
+  # Tasks to train on (comma-separated)
+  train_tasks: "side_effects,atc,maccs"
+  
+  # Tasks to evaluate (comma-separated, defaults to train_tasks)
+  eval_tasks: "side_effects"
+  
+  # Data paths
+  graphs_dir: "data/processed/graphs_v2/"
+  feature_key: "x"
+  
+  # Side effect filtering (optional)
+  # Limits to top N most prevalent side effects
+  max_side_effects: 100  # Set to null for all 4,251 side effects
+  
+  # Task-specific data files (automatically loaded)
+  task_files:
+    side_effects: "data/processed/cid_se_matrix.csv"
+    atc: "data/processed/cid_atc_l3_matrix.csv"
+    maccs: "data/processed/cid_maccs_matrix.csv"
+    molprops: "data/processed/cid_molprops_matrix_simple.csv"
+
+# Task Descriptions
+# - side_effects: 4,251 side effects from SIDER (or top-N filtered)
+# - atc: 167 ATC level-3 therapeutic classes
+# - maccs: 166-bit MACCS molecular fingerprints
+# - molprops: 1 molecular property (molecular weight)
+
+# Training Strategy
+# - 80/10/10 train/val/test split (fixed seed=42)
+# - No stratification (random split over drug CIDs)
+# - Multitask learning with weighted loss aggregation
+# - Focal loss for imbalanced side effect prediction
+# - BCEWithLogitsLoss for ATC and MACCS
+# - MSELoss for molecular properties

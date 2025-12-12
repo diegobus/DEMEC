@@ -234,7 +234,7 @@ def regression_metrics(preds, y_true):
     # MAE
     mae = np.abs(preds_np - y_true_np).mean()
     
-    # R² (coefficient of determination)
+    # R^2
     ss_res = ((y_true_np - preds_np) ** 2).sum()
     ss_tot = ((y_true_np - y_true_np.mean(axis=0)) ** 2).sum()
     r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
@@ -302,7 +302,7 @@ def comprehensive_metrics(logits, y_true, k_values=[10, 50, 100], task_type='cla
     return metrics
 
 
-# Backward compatibility: keep old metric but mark as deprecated
+# Backward compatibility (deprecated metric)
 def recall_at_all(logits, y_true, agg='sum'):
     """
     DEPRECATED: Use comprehensive_metrics() instead.

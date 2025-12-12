@@ -15,9 +15,8 @@ from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 CID_RE = re.compile(r"CID10*([1-9]\d*)$")
 RDKit_AVAILABLE = True
 
-# ---- Categorical Variables ----------------------------------------
-
-ATOM_LIST = list(range(1, 119))  # atomic numbers 1..118
+# Categorical variables for atom features
+ATOM_LIST = list(range(1, 119))
 CHIRALITY_LIST = [
     rdchem.ChiralType.CHI_UNSPECIFIED,
     rdchem.ChiralType.CHI_TETRAHEDRAL_CW,
@@ -32,10 +31,10 @@ HYBRID_LIST = [
     rdchem.HybridizationType.SP3D2,
 ]
 
-# ---- Config: where to cache -------------------------------------------------
+# Output directories
 CACHE_DIR = "data/processed"
 SMILES_CACHE = os.path.join(CACHE_DIR, "smiles_cache.csv")
-GRAPH_DIR = os.path.join(CACHE_DIR, "graphs_v2")  # one file per CID: <cid>.gpickle
+GRAPH_DIR = os.path.join(CACHE_DIR, "graphs_v2")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(GRAPH_DIR, exist_ok=True)
@@ -46,12 +45,12 @@ class Drug:
     cid: Optional[str] = None
     name: Optional[str] = None
     atc: Optional[str] = None
-    smiles_raw: Optional[str] = None  # as returned by PubChem
-    smiles_sanitized: Optional[str] = None  # stripped stereo (safe for pysmiles)
-    graph_path: Optional[str] = None  # path to gpickle if built
+    smiles_raw: Optional[str] = None
+    smiles_sanitized: Optional[str] = None
+    graph_path: Optional[str] = None
 
 
-# ---- Cache helpers ----------------------------------------------------------
+# Cache management functions
 def load_smiles_cache(path: str = SMILES_CACHE) -> Dict[str, Dict[str, str]]:
     if not os.path.exists(path):
         return {}
@@ -86,7 +85,7 @@ def graph_cached(cid: str) -> Optional[str]:
     return p if os.path.exists(p) else None
 
 
-# ---- Utilities --------------------------------------------------------------
+# Utility functions
 def parse_cid(raw: str) -> Optional[str]:
     m = CID_RE.search(raw.strip())
     return m.group(1) if m else None
@@ -113,7 +112,7 @@ def sanitize_smiles(smiles: Optional[str]) -> Optional[str]:
             return None
         # Non-isomeric removes / and \ around double bonds that can break pysmiles
         return Chem.MolToSmiles(mol, isomericSmiles=False)
-    # last-resort fallback (not chemically rigorous)
+
     return smiles.replace("/", "").replace("\\", "")
 
 
@@ -132,7 +131,7 @@ def atom_features(atom: rdchem.Atom) -> np.ndarray:
     """One hot encoding of different atom features"""
     feats = []
 
-    # element - see the list above 
+    # element
     feats += one_hot(atom.GetAtomicNum(), ATOM_LIST)
 
     # degree, formal charge, and valence, aromatic, ring, Hs
@@ -143,7 +142,7 @@ def atom_features(atom: rdchem.Atom) -> np.ndarray:
     feats.append(int(atom.IsInRing()))
     feats.append(atom.GetTotalNumHs(includeNeighbors=True))
 
-    # hybridization & chirality - see the lists above
+    # hybridization and chirality
     feats += one_hot(atom.GetHybridization(), HYBRID_LIST)
     feats += one_hot(atom.GetChiralTag(), CHIRALITY_LIST)
 
@@ -254,7 +253,6 @@ def aggregate_data(names_file: str, atc_file: str) -> List[Drug]:
                     "ts": str(int(time.time())),
                 }
             )
-            # Avoid hammering PubChem
             time.sleep(0.2)
 
         # Build/load graph cache
@@ -279,8 +277,8 @@ def aggregate_data(names_file: str, atc_file: str) -> List[Drug]:
     print(
         f"Finished: SMILES cached for {sum(1 for d in drugs if d.smiles_sanitized)}/{len(drugs)} | graphs cached for {built}/{len(drugs)}"
     )
-    print(f"• SMILES cache: {SMILES_CACHE}")
-    print(f"• Graphs dir  : {GRAPH_DIR}")
+    print(f"SMILES cache: {SMILES_CACHE}")
+    print(f"Graphs dir  : {GRAPH_DIR}")
     return drugs
 
 

@@ -1,0 +1,27 @@
+# Single-Task Configuration: Side Effects Only
+# Predicts top-100 most common side effects
+
+experiment_name: "single_task_side_effects"
+
+model:
+  architecture: "gat"
+  input_dim: 154
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "attention"
+
+training:
+  epochs: 300
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  focal_alpha: 0.25
+
+data:
+  train_tasks: "side_effects"
+  eval_tasks: "side_effects"
+  graphs_dir: "data/processed/graphs_v2/"
+  feature_key: "x"
+  max_side_effects: 100

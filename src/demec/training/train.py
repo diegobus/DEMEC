@@ -58,20 +58,19 @@ def setup_model(dataset, args, device):
         eval_flag = "1" if task_name in eval_tasks else "0"
         print(f"  {task_name} (dim={dim}) | Train: {train_flag} | Eval: {eval_flag}")
 
-        # Determine task type (classification vs regression)
+        # Configure task-specific loss functions
         if task_name == "molprops":
             task_type = "regression"
             loss_type = "mse"
-            focal_alpha = 0.25  # Not used for regression
+            focal_alpha = 0.25
         else:
             task_type = "classification"
-            # Determine loss type and focal alpha for classification
             if task_name == "side_effects":
                 loss_type = "focal"
                 focal_alpha = args.focal_alpha if hasattr(args, 'focal_alpha') and args.focal_alpha is not None else 0.25
             else:
                 loss_type = "bce"
-                focal_alpha = 0.25  # Not used for BCE
+                focal_alpha = 0.25
 
         head = PredictionHead(
             input_dim=args.hidden_dim,
@@ -85,11 +84,11 @@ def setup_model(dataset, args, device):
         heads_dict[task_name] = head
         loss_funcs[task_name] = head.get_loss_func()
 
-        # Set task weight (default 1.0 if not specified, 0.0 if not training)
+        # Set task weight for multitask loss weighting
         if task_name in train_tasks:
             task_weights[task_name] = weight_dict.get(task_name, 1.0)
         else:
-            task_weights[task_name] = 0.0  # No contribution to loss
+            task_weights[task_name] = 0.0
 
     # Create backbone
     pooling = getattr(args, 'pooling', 'mean')
@@ -113,11 +112,7 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, 
     model.train()
     total_loss = 0.0
     task_losses = {task: 0.0 for task in loss_funcs.keys()}
-    
-    # Compute normalization factor (sum of weights for active tasks)
     weight_sum = sum(task_weights.values())
-    
-    # Collect predictions for each eval task
     eval_predictions = {task: {'logits': [], 'targets': []} for task in eval_tasks}
 
     for batch in loader:
@@ -143,10 +138,9 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, 
                 weighted_loss = task_weights[task_name] * loss
                 batch_loss += weighted_loss
 
-                # Track per-task losses
                 task_losses[task_name] += loss.item() * batch.num_graphs
 
-                # Collect predictions for eval tasks
+
                 if task_name in eval_tasks:
                     eval_predictions[task_name]['logits'].append(logits.detach())
                     eval_predictions[task_name]['targets'].append(target.detach())
@@ -157,7 +151,6 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, 
         optimizer.zero_grad()
         batch_loss.backward()
 
-        # Gradient clipping (optional)
         if clip_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm)
 
@@ -165,14 +158,12 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, 
 
         total_loss += batch_loss.item() * batch.num_graphs
 
-    # Compute metrics for each eval task
     all_metrics = {}
     for task_name in eval_tasks:
         if eval_predictions[task_name]['logits']:
             logits = torch.cat(eval_predictions[task_name]['logits'], dim=0)
             targets = torch.cat(eval_predictions[task_name]['targets'], dim=0)
             
-            # Determine task type for appropriate metrics
             if task_name == 'molprops':
                 task_type = 'regression'
             elif task_name == 'maccs':
@@ -193,11 +184,7 @@ def validate(model, loader, loss_funcs, task_weights, eval_tasks, device):
     model.eval()
     total_loss = 0.0
     task_losses = {task: 0.0 for task in loss_funcs.keys()}
-    
-    # Compute normalization factor (sum of weights for active tasks)
     weight_sum = sum(task_weights.values())
-    
-    # Collect predictions for each eval task
     eval_predictions = {task: {'logits': [], 'targets': []} for task in eval_tasks}
 
     with torch.no_grad():
@@ -223,11 +210,8 @@ def validate(model, loader, loss_funcs, task_weights, eval_tasks, device):
                     loss = loss_funcs[task_name](logits, target)
                     weighted_loss = task_weights[task_name] * loss
                     batch_loss += weighted_loss
-
-                    # Track per-task losses
                     task_losses[task_name] += loss.item() * batch.num_graphs
 
-                    # Collect predictions for eval tasks
                     if task_name in eval_tasks:
                         eval_predictions[task_name]['logits'].append(logits.detach())
                         eval_predictions[task_name]['targets'].append(target.detach())
@@ -236,14 +220,12 @@ def validate(model, loader, loss_funcs, task_weights, eval_tasks, device):
             batch_loss = batch_loss / weight_sum
             total_loss += batch_loss.item() * batch.num_graphs
 
-    # Compute metrics for each eval task
     all_metrics = {}
     for task_name in eval_tasks:
         if eval_predictions[task_name]['logits']:
             logits = torch.cat(eval_predictions[task_name]['logits'], dim=0)
             targets = torch.cat(eval_predictions[task_name]['targets'], dim=0)
             
-            # Determine task type for appropriate metrics
             if task_name == 'molprops':
                 task_type = 'regression'
             elif task_name == 'maccs':
@@ -513,11 +495,6 @@ def main():
         print(f"Metrics: mAP (primary), P@50, P@100, AUROC")
     print("-" * 80)
 
-    # Early stopping (disabled for fair experiment comparison)
-    best_val_metric = float('-inf')
-    patience = 10000  # Effectively disabled
-    patience_counter = 0
-
     for epoch in range(cfg.epochs):
         train_loss, train_task_losses, train_metrics = train_epoch(
             model, train_loader, optimizer, loss_funcs, task_weights, eval_tasks, device, cfg.clip_grad_norm
@@ -570,16 +547,6 @@ def main():
         
         if logger.save_checkpoint(epoch, model, optimizer, current_val_metric, metric_name):
             print(f"    Saved best model ({metric_name}: {metric_value:.4f})")
-        
-        # Early stopping check
-        if current_val_metric > best_val_metric:
-            best_val_metric = current_val_metric
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print(f"\nEarly stopping triggered after {epoch+1} epochs (patience={patience})")
-                break
 
     # Finalize logging
     logger.finalize(val_metrics)

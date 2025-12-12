@@ -33,12 +33,9 @@ Thumbs.db
 *.swp
 
 # --- Data ---
-# Keep processed data (cache + graphs), but ignore raw .tsv downloads
 data/**/*.tsv
 data/**/*.tsv.gz
 data/**/*.zip
-
-# -- Results --
 
 # --- Runtime artifacts ---
 runs/
