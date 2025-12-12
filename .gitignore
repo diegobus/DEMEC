@@ -39,8 +39,6 @@ data/**/*.tsv.gz
 data/**/*.zip
 
 # -- Results --
-results/
-checkpoints/
 
 # --- Runtime artifacts ---
 runs/
