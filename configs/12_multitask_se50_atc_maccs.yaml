@@ -1,0 +1,24 @@
+experiment_name: "12_multitask_se50_atc_maccs"
+
+model:
+  architecture: "gat"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "attention"
+
+training:
+  epochs: 300
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+  task_weights: "side_effects:1.0,atc:1.0,maccs:1.0"
+
+data:
+  train_tasks: "side_effects,atc,maccs"
+  eval_tasks: "side_effects"
+  max_side_effects: 50  # Top 50 most common side effects
+
+# Experiment 12: Multitask with top 50 side effects
+# Hypothesis: Multitask may help more with cleaner SE labels

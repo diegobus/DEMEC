@@ -66,7 +66,8 @@ def extract_embeddings(checkpoint_path, graphs_dir='data/processed/graphs_v2/', 
         num_layers=get_arg(args, 'num_layers', 5),
         dropout=get_arg(args, 'dropout', 0.2),
         conv_type=get_arg(args, 'model', 'gcn'),
-        heads=get_arg(args, 'heads', 3)
+        heads=get_arg(args, 'heads', 3),
+        pooling=get_arg(args, 'pooling', 'mean')  # Must match checkpoint!
     )
     
     # Load weights

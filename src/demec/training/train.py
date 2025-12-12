@@ -114,6 +114,9 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, 
     total_loss = 0.0
     task_losses = {task: 0.0 for task in loss_funcs.keys()}
     
+    # Compute normalization factor (sum of weights for active tasks)
+    weight_sum = sum(task_weights.values())
+    
     # Collect predictions for each eval task
     eval_predictions = {task: {'logits': [], 'targets': []} for task in eval_tasks}
 
@@ -148,6 +151,9 @@ def train_epoch(model, loader, optimizer, loss_funcs, task_weights, eval_tasks, 
                     eval_predictions[task_name]['logits'].append(logits.detach())
                     eval_predictions[task_name]['targets'].append(target.detach())
 
+        # Normalize by sum of weights to keep loss magnitude consistent
+        batch_loss = batch_loss / weight_sum
+        
         optimizer.zero_grad()
         batch_loss.backward()
 
@@ -188,6 +194,9 @@ def validate(model, loader, loss_funcs, task_weights, eval_tasks, device):
     total_loss = 0.0
     task_losses = {task: 0.0 for task in loss_funcs.keys()}
     
+    # Compute normalization factor (sum of weights for active tasks)
+    weight_sum = sum(task_weights.values())
+    
     # Collect predictions for each eval task
     eval_predictions = {task: {'logits': [], 'targets': []} for task in eval_tasks}
 
@@ -223,6 +232,8 @@ def validate(model, loader, loss_funcs, task_weights, eval_tasks, device):
                         eval_predictions[task_name]['logits'].append(logits.detach())
                         eval_predictions[task_name]['targets'].append(target.detach())
 
+            # Normalize by sum of weights
+            batch_loss = batch_loss / weight_sum
             total_loss += batch_loss.item() * batch.num_graphs
 
     # Compute metrics for each eval task
@@ -422,7 +433,8 @@ def main():
     cfg.save_model = args.save_model
     # Use experiment_name from config if available, otherwise use CLI arg
     cfg.exp_name = args.exp_name if args.exp_name else config.get('experiment_name', None)
-    cfg.task_weights = args.task_weights
+    # Task weights: CLI overrides config file
+    cfg.task_weights = args.task_weights if args.task_weights else train_cfg.get('task_weights', None)
     cfg.log_dir = args.log_dir if args.log_dir else train_cfg.get('log_dir', 'runs')
     cfg.checkpoint_dir = args.checkpoint_dir if args.checkpoint_dir else train_cfg.get('checkpoint_dir', 'checkpoints')
 

@@ -1,0 +1,23 @@
+experiment_name: "11_se_top50"
+
+model:
+  architecture: "gat"
+  hidden_dim: 128
+  num_layers: 5
+  dropout: 0.2
+  heads: 3
+  pooling: "attention"
+
+training:
+  epochs: 300
+  batch_size: 32
+  lr: 0.0001
+  seed: 42
+
+data:
+  train_tasks: "side_effects"
+  eval_tasks: "side_effects"
+  max_side_effects: 50  # Top 50 most common side effects
+
+# Experiment 11: Top 50 side effects (single-task)
+# Hypothesis: Even fewer classes may further improve mAP
